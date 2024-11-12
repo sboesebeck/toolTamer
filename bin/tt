@@ -1,0 +1,441 @@
+#!/usr/bin/env bash
+
+trap cleanup EXIT QUIT TERM
+GN='\033[0;32m'
+RD='\033[0;31m'
+BL='\033[0;34m'
+YL='\033[0;33m'
+MG='\033[0;35m'
+CN='\033[0;36m'
+
+RESET="\033[0m"
+
+ERR=$RD
+WR=$YL
+
+function cleanup() {
+  echo "Cleaning up"
+  cat $TMP/log
+  rm -rf $TMP
+}
+
+function logn() {
+  echo -ne "$1"
+}
+function log() {
+  echo -e "$1"
+}
+
+function err() {
+  echo -e "${ERR}error:$RESET $1"
+}
+
+function warn() {
+  echo -e "${WR}Warning:$RESET $1"
+}
+
+function logf() {
+  echo -e "$1" >>$TMP/log
+}
+
+function syncFile() {
+  dotfile="$1"
+  gitfile="$2"
+
+  logn "Comparing ${GN}$dotfile${RESET} <-> ${BL}${gitfile##$BASE/configs/}${RESET}....."
+  if [ -e "$dotfile" ]; then
+    s1=$(shasum <"$dotfile")
+    s2=$(shasum <"$gitfile")
+    if [ "$s1" = "$s2" ]; then
+      log "${GREEN}Ok${RESET}"
+    else
+      log "${YL}files differ...${RESET} - replacing"
+      if [ ! -d $(dirname $dotfile) ]; then
+        mkdir -p $(dirname $dotfile)
+      fi
+      if [ -e "$dotfile" ]; then
+        mv "$dotfile" "$dotfile.ttbak"
+      fi
+      cp "$gitfile" "$dotfile" || err "Copy failed"
+    fi
+  else
+    log "${RED}no $dotfile${RESET}"
+    if [ ! -d $(dirname $dotfile) ]; then
+      mkdir -p $(dirname $dotfile)
+    fi
+    if [ -e "$dotfile" ]; then
+      mv "$dotfile" "$dotfile.ttbak"
+    fi
+    cp "$gitfile" "$dotfile" || err "Copy failed"
+  fi
+}
+
+function updateTTFromInstallation() {
+  log "Comparing current system with ToolTamer files, updating ToolTamer"
+  bash -c "$LIST" | while read l; do
+    logn "Checking $l..."
+    found=0
+    for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+      if grep $l $BASE/configs/$c/to_install.$INSTALLER >/dev/null 2>&1; then
+        log "${GN}in $l${RESET}"
+        found=1
+        break
+      fi
+    done
+    if [ $found -eq 0 ]; then
+      log "${RD}Missing$RESET - adding to Host"
+      echo "$l" >>$BASE/configs/$HOST/to_install.$INSTALLER
+    fi
+
+  done
+
+}
+
+function syncInstall() {
+
+  logn "Preparing list of software for $HOST..."
+  for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+    cat $BASE/configs/$c/to_install.$INSTALLER >>$TMP/to_install
+  done
+  sort -u $TMP/to_install >$TMP/to_install.sorted
+  logn "$(wc -l $TMP/to_install.sorted | cut -c1-9) tools to install. "
+  log "${GN}done$RESET"
+  echo
+  log "now: running through all localy installed software"
+  logn "Checking: "
+  bash -c "$LIST" >$TMP/local_installed
+  cat $TMP/local_installed | while read l; do
+    if [ -z "$l" ]; then
+      continue
+    fi
+    if [[ "$l" =~ "=" ]]; then
+      continue
+    fi
+    if [[ "$l" =~ "#" ]]; then
+      continue
+    fi
+    if ! grep "$l" $TMP/to_install.sorted >/dev/null 2>&1; then
+      U=$(echo "$USES" | sed -e "s/%%/$l/g")
+      deps=$(bash -c "$U '$l'" | wc -w)
+      if [ "$deps" -gt 0 ]; then
+        logn "${YL}D$RESET"
+        logf "$l is dependency of $deps packages"
+        logf "adding $l to install list for $HOST"
+        echo "$l" >>$BASE/configs/$HOST/to_install.$INSTALLER
+      else
+        logn "${RD}R${RESET}"
+        logf "Removing ${RD}$l$RESET from system - is not in list"
+
+        $UNINSTALL $l || err "Uninstall of $l failed"
+      fi
+    else
+      logn "${GN}.$RESET"
+    fi
+  done
+  log "${GN}ok$RESET"
+  log "now running through all to be installed"
+  logn "Checking: "
+  cat $TMP/to_install.sorted | while read l; do
+
+    if [ -z "$l" ]; then
+      continue
+    fi
+    if [[ "$l" =~ "=" ]]; then
+      continue
+    fi
+    if [[ "$l" =~ "#" ]]; then
+      continue
+    fi
+    if ! grep "$l" $TMP/local_installed >/dev/null 2>&1; then
+      $INSTALL "$l" </dev/tty >>$TMP/log 2>&1 && logn "${GN}I$RESET" || {
+        logf "Installation of $l failed"
+        logn "${RD}E$RESET"
+      }
+    else
+      logn "."
+    fi
+  done
+  log "${GN}ok$RESET"
+
+  if [ "$OS_TYPE" = "Darwin" ]; then
+    log "Checking taps"
+    brew tap >$TMP/local_taps
+    for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+      if [ -e $BASE/configs/$i/taps ]; then
+        cat $BASE/configs/$i/taps >>$TMP/taps
+      fi
+    done
+    sort -u $TMP/taps >$TMP/taps.sorted
+    cat $TMP/local_taps | while read l; do
+      if ! grep $l $TMP/taps.sorted >/dev/null 2>&1; then
+        logn "${RD}R$RESET"
+        logf "Removing tap $l"
+        brew untap $l || err "Untapping $l failed"
+      else
+        logn "."
+      fi
+    done
+    cat $TMP/taps.sorted | while read l; do
+      if ! grep $l $TMP/local_taps >/dev/null; then
+        brew tap $l || err "Tapping $l failed"
+        logn "${GN}I$RESET"
+      else
+        logn "."
+      fi
+    done
+    log "${GN}ok$RESET"
+  fi
+
+}
+
+function syncTTtoSystemFiles() {
+  log "Updating local files from TT."
+  for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+    cat $BASE/configs/$i/files.conf | while read l; do
+      f=$(echo $l | cut -f1 -d\;)
+      d=$(echo $l | cut -f2 -d\;)
+      #log "Syncing file $f with ~/$d"
+      if [ "$d" != "${d%/}" ]; then
+        #ends with /
+        d=$d$(basename "$f")
+      fi
+      if [ ! -d "$(dirname \"$HOME/$d\")" ]; then
+        mkdir -p "$(dirname \"$HOME/$d\")"
+      fi
+      syncFile "$HOME/$d" "$BASE/configs/$i/files/$f"
+    done
+  done
+}
+
+function updatingTTFromSystemFiles() {
+  log "Updating TT from System."
+
+  for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+    cat $BASE/configs/$i/files.conf | while read l; do
+      f=$(echo $l | cut -f1 -d\;)
+      d=$(echo $l | cut -f2 -d\;)
+      if [ ! -e "$HOME/$d" ]; then
+        continue
+      fi
+      # TODO: this will likely fail - check needs to check the file, resulting not the config
+      # This will hide all files in the dame dir! not what we want
+      if grep ";$d" $BASE/configs/$HOST/files.conf >/dev/null 2>&1; then
+        # skipping - there is a local version
+        continue
+      fi
+      if [ "$d" != "${d%/}" ]; then
+        #ends with /
+        d=$d$(basename $f)
+      fi
+      syncFile "$BASE/configs/common/files/$f" "$HOME/$d"
+    done
+  done
+
+}
+function runLocalInstall() {
+  for c in $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+    if [ -e $BASE/configs/$c/local_install.sh ]; then
+      log "Running local installation script from ${BL}$c$RESET settings" | lolcat
+      source $BASE/configs/$c/local_install.sh
+      log "Done."
+      echo
+    else
+      log "No local installation script for $c"
+    fi
+  done
+}
+
+####### MAIN ######
+#####
+####
+
+#BASE=$(dirname $0)/..
+BASE=$HOME/.config/toolTamer/
+TMP=/tmp/tt$$
+mkdir $TMP
+touch $TMP/log
+cd $BASE
+
+##### STARTUP
+log "---------> ${CN}Tool${GN}Tamer ${MG}V1.0$RESET <-----------"
+echo " "
+#git pull >/dev/null || exit 1
+
+OS_TYPE="$(uname -s)"
+case "${OS_TYPE}" in
+
+Darwin*)
+  log "$BL Info: Running on macOS$RESET"
+  logn "checking brew.sh...."
+  brew list >/dev/null || {
+    err "brew not installed"
+    exit 1
+  }
+  log "${GN}ok$RESET"
+  INSTALLER="brew"
+  INSTALL="brew install"
+  UNINSTALL="brew uninstall"
+  LIST="brew list -1"
+  USES="brew uses --installed"
+  ;;
+Linux*)
+  log "$BL Info: Running on Linux$RESET"
+  while true; do
+    hash apt && {
+      #log "${YN}Attention:${RESET} on linux uninstalling of tools is not supported!"
+      INSTALLER="apt"
+      INSTALL="sudo apt install -y"
+      UNINSTALL="sudo apt purge"
+      USES="apt-rdepends -r %% 2>/dev/null | grep Reverse"
+      #USES="function f(){ apt-rdepends -r \$1 2>/dev/null| grep Reverse; }; f "
+      USES="echo 'no deps'"
+      LIST="apt list --installed | grep -v Listing... |/usr/bin/cut -f1 -d/"
+
+    }
+    hash pacman && {
+      log "${YN}Attention:${RESET} on linux uninstalling of tools is not supported!"
+      INSTALLER="pacman"
+      INSTALL="sudo pacman -Sy"
+      USES='pacman -Qi %% | grep "Required By " | grep -v None |tr " " "\n"| wc -l'
+      LIST="pacman -Q | awk '{print \$1}'"
+    }
+
+  done
+  ;;
+*)
+  echo -e "$ERR Unknown Operating System:$RESET$OS_TYPE"
+  exit 1
+  ;;
+esac
+
+HOST="$(hostname)"
+log "Trying to tame all tools in all your systems. This is $BL$HOST$RESET - OS is $BL$OS_TYPE$RESET and the installer used here is $BL$INSTALLER$RESET"
+
+if [ ! -e $BASE ]; then
+  log "No config - enter gitlab url to checkout config dir - ctrl-c to abort...(empty for no clone)"
+
+  read u
+  if [ ! -z "$u" ]; then
+    git clone $u $BASE || {
+      err "Checkout failed!"
+      exit 1
+    }
+    log "${GN}Success$RESET checking out config"
+  else
+    log "No URL provided- create empty default? (enter / ctrl-c)"
+    read
+    mkdir -p $BASE/configs/common/files
+    touch $BASE/configs/common/to_install.brew
+    touch $BASE/configs/common/to_install.apt
+    mkdir -p $BASE/configs/$HOST/files
+    touch $BASE/configs/$HOST/files.conf
+    touch $BASE/configs/$HOST/to_install.$INSTALLER
+    touch $BASE/configs/$HOST/includes.conf
+    if [ "$INSTALLER" = "brew" ]; then
+      touch $BASE/configs/$HOST/taps
+    fi
+
+    log "done"
+
+    echo "Configuration for common/$HOST created. But this is only a start - please have a closer look at $BASE/config/$HOST" | lolcat
+  fi
+fi
+
+if [ -e $BASE/configs/$HOST ]; then
+  log "There is a config for this machine available"
+else
+  log "No config - press enter to create a new one, ctrl-c to abort..."
+  read
+  mkdir -p $BASE/configs/$HOST/files
+  touch $BASE/configs/$HOST/files.conf
+  touch $BASE/configs/$HOST/to_install.$INSTALLER
+  touch $BASE/configs/$HOST/includes.conf
+  if [ "$INSTALLER" = "brew" ]; then
+    touch $BASE/configs/$HOST/taps
+  fi
+
+  log "done"
+
+  echo "Configuration for $HOST created. But this is only a start - please have a closer look at $BASE/config/$HOST" | lolcat
+fi
+
+export updateSys="Update local installation $HOST from ToolTamer structure\nupdates installed tools, config files on change"
+export updateTT="Take a snapshot of current installation\nput files from this installation to ToolTamer"
+export show="Show configuration of ToolTamer"
+
+# if hash fzf; then
+if hash fzf; then
+  opt=$(echo -e "Quit\nShow config\nSnapshot System\nUpdate System" | fzf --height=8 --border-label="ToolTamer 1.0" --border="rounded" --preview="case {} in 'Update System') echo -e \"$updateSys\";; 'Snapshot System') echo -e \"$updateTT\";; 'Show config') echo -e \"$show\";; *) echo \"abort\";; esac")
+  if [ -z "$opt" ] || [ "q$opt" = "qquit" ]; then
+    echo "Exiting..."
+    exit 0
+  fi
+else
+
+  select opt in "Update System" "Snapshot System" "Show config" "Quit"; do
+    echo "Chose opt $opt"
+    break
+  done
+fi
+
+case "$opt" in
+Quit)
+  log "Exiting..."
+  exit 0
+  ;;
+Update\ System)
+  syncInstall
+  syncTTtoSystemFiles
+  runLocalInstall
+  ;;
+Snapshot\ System)
+  updateTTFromInstallation
+  log "updating TT files from this system"
+  updatingTTFromSystemFiles
+  ;;
+Show\ config)
+  cd "$BASE/configs"
+  log "Available configs: "
+  if hash fzf; then
+    c=$(ls | fzf)
+  else
+    select c in *; do
+      break
+    done
+  fi
+  logn "${BL}$c$RESET - "
+  log "tools: $(cat $BASE/configs/$c/to_install.$INSTALL | wc -l)"
+  log "files: $(cat $BASE/configs/$c/files.conf | wc -l)"
+  select o in "Show files" "Show tools"; do
+    case "$o" in
+    "Show files")
+      f=$(fzf <$BASE/configs/$c/files.conf)
+      log "Move file to other config (M), change file settings (C) or delete file (D)?"
+      read a
+      case "$a" in
+      "M")
+        echo "To where?"
+        ;;
+      "C")
+        logn "Current setting: $f"
+        ;;
+      "D")
+        logn "Really delete?"
+        ;;
+      *)
+        err "Unknown option $a"
+        ;;
+      esac
+      log "Info: not doing anything yet"
+      ;;
+    "Show tools")
+      fzf <$BASE/configs/to_install.$INSTALL
+      ;;
+    esac
+    break
+  done
+  exit 0
+  ;;
+esac
+
+log "All tasks ${GN}done$RESET - logs: "
