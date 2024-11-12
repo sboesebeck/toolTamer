@@ -288,7 +288,7 @@ Linux*)
     #log "${YN}Attention:${RESET} on linux uninstalling of tools is not supported!"
     INSTALLER="apt"
     INSTALL="sudo apt install -y"
-    UNINSTALL="sudo apt purge"
+    UNINSTALL="sudo apt purge -y"
     if hash apt-rdepends; then
       USES="apt-rdepends -r %% 2>/dev/null | grep Reverse"
     else
