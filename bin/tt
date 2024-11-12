@@ -200,7 +200,7 @@ function syncTTtoSystemFiles() {
         d=$d$(basename "$f")
       fi
       if [ ! -d "$(dirname \"$HOME/$d\")" ]; then
-        mkdir -p "$(dirname \"$HOME/$d\")"
+        mkdir -p "$(dirname $HOME/$d)"
       fi
       syncFile "$HOME/$d" "$BASE/configs/$i/files/$f"
     done
