@@ -286,9 +286,12 @@ Linux*)
       INSTALLER="apt"
       INSTALL="sudo apt install -y"
       UNINSTALL="sudo apt purge"
-      USES="apt-rdepends -r %% 2>/dev/null | grep Reverse"
-      #USES="function f(){ apt-rdepends -r \$1 2>/dev/null| grep Reverse; }; f "
-      USES="echo 'no deps'"
+      if has apt-rdepends; then
+        USES="apt-rdepends -r %% 2>/dev/null | grep Reverse"
+      else
+        log "${YL}Warning:$RESET cannot determine dependencies, consider installing apt-rdepends."
+        USES="echo 'no dependencies'"
+      fi
       LIST="apt list --installed | grep -v Listing... |/usr/bin/cut -f1 -d/"
 
     }
@@ -299,6 +302,10 @@ Linux*)
       USES='pacman -Qi %% | grep "Required By " | grep -v None |tr " " "\n"| wc -l'
       LIST="pacman -Q | awk '{print \$1}'"
     }
+    if [ -z $INSTALLER ]; then
+      err "no valid package manager found, apt and pacman are supported"
+      exit 1
+    fi
 
   done
   ;;
@@ -327,6 +334,10 @@ if [ ! -e $BASE ]; then
     mkdir -p $BASE/configs/common/files
     touch $BASE/configs/common/to_install.brew
     touch $BASE/configs/common/to_install.apt
+    touch $BASE/tt.conf
+    echo "# automatically update configs from repo. Valid values are true, false and ask."
+    echo "GIT_AUTO_UPDATE=ask" >>$BASE/tt.conf
+
     mkdir -p $BASE/configs/$HOST/files
     touch $BASE/configs/$HOST/files.conf
     touch $BASE/configs/$HOST/to_install.$INSTALLER
@@ -340,6 +351,8 @@ if [ ! -e $BASE ]; then
     echo "Configuration for common/$HOST created. But this is only a start - please have a closer look at $BASE/config/$HOST" | lolcat
   fi
 fi
+GIT_AUTO_UPDATE=ask
+source $BASE/configs/tt.conf
 
 if [ -e $BASE/configs/$HOST ]; then
   log "There is a config for this machine available"
@@ -357,6 +370,43 @@ else
   log "done"
 
   echo "Configuration for $HOST created. But this is only a start - please have a closer look at $BASE/config/$HOST" | lolcat
+fi
+
+if [ -e $BASE/.git ]; then
+  case "$GIT_AUTO_UPDATE" in
+  ask)
+    while true; do
+      logn "Should I try to update configs? (y/n)"
+      read a
+      if [ "$a" = "n" ]; then
+        log "not updating"
+      elif [ "$a" = "y" ]; then
+        log "updating"
+        cd "$BASE"
+        git pull || {
+          err "Pull failed - continue? (enter / ctrl-c)"
+          read
+        }
+      else
+        err "y or n - not $a"
+      fi
+    done
+    ;;
+  true)
+    cd "$BASE"
+    git pull || {
+      err "Pull failed -continue? (enter / ctrl-c)"
+      read
+    }
+    ;;
+  false)
+    echo "Not updating configs"
+    ;;
+  *)
+    echo "Unknown option for GIT_AUTO_UPDATE $GIT_AUTO_UPDATE in config. valid values: true, false, ask"
+    exit 1
+    ;;
+  esac
 fi
 
 export updateSys="Update local installation $HOST from ToolTamer structure\nupdates installed tools, config files on change"
