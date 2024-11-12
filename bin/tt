@@ -123,10 +123,14 @@ function syncInstall() {
         logf "adding $l to install list for $HOST"
         echo "$l" >>$BASE/configs/$HOST/to_install.$INSTALLER
       else
-        logn "${RD}R${RESET}"
-        logf "Removing ${RD}$l$RESET from system - is not in list"
-
-        $UNINSTALL $l || err "Uninstall of $l failed"
+        if [[ "$l" =~ "lib" ]]; then
+          log "${YN}L$RESET"
+          logf "Assuming $l is a lib - not uninstalling"
+        else
+          logn "${RD}R${RESET}"
+          logf "Removing ${RD}$l$RESET from system - is not in list"
+          $UNINSTALL $l || err "Uninstall of $l failed"
+        fi
       fi
     else
       logn "${GN}.$RESET"
