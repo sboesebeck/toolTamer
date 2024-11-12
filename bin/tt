@@ -350,7 +350,7 @@ if [ ! -e $BASE ]; then
   fi
 fi
 GIT_AUTO_UPDATE=ask
-source $BASE/configs/tt.conf
+source $BASE/tt.conf
 
 if [ -e $BASE/configs/$HOST ]; then
   log "There is a config for this machine available"
