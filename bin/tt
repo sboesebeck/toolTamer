@@ -115,17 +115,17 @@ function syncInstall() {
       continue
     fi
     if ! grep "$l" $TMP/to_install.sorted >/dev/null 2>&1; then
-      U=$(echo "$USES" | sed -e "s/%%/$l/g")
-      deps=$(bash -c "$U" | wc -w)
-      if [ "$deps" -gt 0 ]; then
-        logn "${YL}D$RESET"
-        logf "$l is dependency of $deps packages"
-        logf "adding $l to install list for $HOST"
-        echo "$l" >>$BASE/configs/$HOST/to_install.$INSTALLER
+      if [[ "$l" =~ "lib" ]]; then
+        log "${YN}L$RESET"
+        logf "Assuming $l is a lib - not uninstalling"
       else
-        if [[ "$l" =~ "lib" ]]; then
-          log "${YN}L$RESET"
-          logf "Assuming $l is a lib - not uninstalling"
+        U=$(echo "$USES" | sed -e "s/%%/$l/g")
+        deps=$(bash -c "$U" | wc -w)
+        if [ "$deps" -gt 0 ]; then
+          logn "${YL}D$RESET"
+          logf "$l is dependency of $deps packages"
+          logf "adding $l to install list for $HOST"
+          echo "$l" >>$BASE/configs/$HOST/to_install.$INSTALLER
         else
           logn "${RD}R${RESET}"
           logf "Removing ${RD}$l$RESET from system - is not in list"
