@@ -378,6 +378,7 @@ if [ -e $BASE/.git ]; then
       read a
       if [ "$a" = "n" ]; then
         log "not updating"
+        break
       elif [ "$a" = "y" ]; then
         log "updating"
         cd "$BASE"
@@ -385,6 +386,7 @@ if [ -e $BASE/.git ]; then
           err "Pull failed - continue? (enter / ctrl-c)"
           read
         }
+        break
       else
         err "y or n - not $a"
       fi
