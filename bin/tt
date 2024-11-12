@@ -116,7 +116,7 @@ function syncInstall() {
     fi
     if ! grep "$l" $TMP/to_install.sorted >/dev/null 2>&1; then
       U=$(echo "$USES" | sed -e "s/%%/$l/g")
-      deps=$(bash -c "$U '$l'" | wc -w)
+      deps=$(bash -c "$U" | wc -w)
       if [ "$deps" -gt 0 ]; then
         logn "${YL}D$RESET"
         logf "$l is dependency of $deps packages"
@@ -276,7 +276,7 @@ Darwin*)
   INSTALL="brew install"
   UNINSTALL="brew uninstall"
   LIST="brew list -1"
-  USES="brew uses --installed"
+  USES="brew uses --installed %%"
   ;;
 Linux*)
   log "$BL Info: Running on Linux$RESET"
