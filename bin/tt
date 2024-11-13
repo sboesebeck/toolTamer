@@ -199,6 +199,12 @@ function syncTTtoSystemFiles() {
     cat $BASE/configs/$i/files.conf | while read l; do
       f=$(echo $l | cut -f1 -d\;)
       d=$(echo $l | cut -f2 -d\;)
+      if [ -z "$f" ]; then
+        continue
+      fi
+      if [[ "$f" =~ "#" ]]; then
+        continue
+      fi
       #log "Syncing file $f with ~/$d"
       if [ "$d" != "${d%/}" ]; then
         #ends with /
