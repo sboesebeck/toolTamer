@@ -41,6 +41,11 @@ function syncFile() {
   dotfile="$1"
   gitfile="$2"
 
+  if [ "q$dotfile" = "q" ] || [ "q$gitfile" = "q" ]; then
+    logf "Cannot sync '$dotfile' to '$gitfile'"
+    return
+  fi
+
   logn "Comparing ${GN}$dotfile${RESET} <-> ${BL}${gitfile##$BASE/configs/}${RESET}....."
   if [ -e "$dotfile" ]; then
     s1=$(shasum <"$dotfile")
