@@ -216,7 +216,7 @@ function syncTTtoSystemFiles() {
   done
   cat $TMP/to_copy.lst | while read l; do
     f=$(echo "$l" | cut -f1 -d\;)
-    d=$(echo "$l" | cut -f1 -d\;)
+    d=$(echo "$l" | cut -f2 -d\;)
     syncFile "$HOME/$d" "$BASE/configs/$i/files/$f"
   done
 }
