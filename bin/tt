@@ -211,13 +211,13 @@ function syncTTtoSystemFiles() {
         }
         mv $TMP/to_copy.tmp $TMP/to_copy.lst
       fi
-      echo "$f;$d" >>$TMP/to_copy.lst
+      echo "$BASE/configs/$i/files/$f;$HOME/$d" >>$TMP/to_copy.lst
     done
   done
   cat $TMP/to_copy.lst | while read l; do
     f=$(echo "$l" | cut -f1 -d\;)
     d=$(echo "$l" | cut -f2 -d\;)
-    syncFile "$HOME/$d" "$BASE/configs/$i/files/$f"
+    syncFile "$d" "$f"
   done
 }
 
