@@ -204,8 +204,8 @@ function syncTTtoSystemFiles() {
         #ends with /
         d=$d$(basename "$f")
       fi
-      if grep ";$d" $TMP/to_copy.lst >/dev/null; then
-        grep -v ";$d" $TMP/to_copy.lst >$TMP/to_copy.tmp || {
+      if grep ";$HOME/$d" $TMP/to_copy.lst >/dev/null; then
+        grep -v ";$HOME/$d" $TMP/to_copy.lst >$TMP/to_copy.tmp || {
           err "error"
           exit 1
         }
