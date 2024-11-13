@@ -15,7 +15,6 @@ WR=$YL
 
 function cleanup() {
   echo "Cleaning up"
-  cat $TMP/log
   rm -rf $TMP
 }
 
@@ -194,6 +193,8 @@ function syncInstall() {
 
 function syncTTtoSystemFiles() {
   log "Updating local files from TT."
+  echo >$TMP/to_copy.lst
+
   for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
     cat $BASE/configs/$i/files.conf | while read l; do
       f=$(echo $l | cut -f1 -d\;)
@@ -203,11 +204,20 @@ function syncTTtoSystemFiles() {
         #ends with /
         d=$d$(basename "$f")
       fi
-      if [ ! -d "$(dirname \"$HOME/$d\")" ]; then
-        mkdir -p "$(dirname $HOME/$d)"
+      if grep ";$d" $TMP/to_copy.lst >/dev/null; then
+        grep -v ";$d" $TMP/to_copy.lst >$TMP/to_copy.tmp || {
+          err "error"
+          exit 1
+        }
+        mv $TMP/to_copy.tmp $TMP/to_copy.lst
       fi
-      syncFile "$HOME/$d" "$BASE/configs/$i/files/$f"
+      echo "$f;$d" >>$TMP/to_copy.lst
     done
+  done
+  cat $TMP/to_copy.lst | while read l; do
+    f=$(echo "$l" | cut -f1 -d\;)
+    d=$(echo "$l" | cut -f1 -d\;)
+    syncFile "$HOME/$d" "$BASE/configs/$i/files/$f"
   done
 }
 
@@ -492,4 +502,28 @@ Show\ config)
   ;;
 esac
 
-log "All tasks ${GN}done$RESET - logs: "
+log "All tasks ${GN}done$RESET"
+
+logn "Do you want to see the logs or copy the logs somewhere?"
+
+select o in "See log" "copy log" "quit"; do
+  case "$o" in
+  "See log")
+    cat $TMP/log
+    ;;
+  "copy log")
+    logn "Enter destination - empty would be in /tmp: "
+    read d
+    if [ -z "$d" ]; then
+      d="/tmp"
+    fi
+    cp $TMP/log $d
+    ;;
+  "quit")
+    break
+    ;;
+  "*")
+    err "Unknown option $o"
+    ;;
+  esac
+done
