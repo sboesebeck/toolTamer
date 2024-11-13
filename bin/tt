@@ -116,7 +116,7 @@ function syncInstall() {
     fi
     if ! grep "$l" $TMP/to_install.sorted >/dev/null 2>&1; then
       if [[ "$l" =~ "lib" ]]; then
-        log "${YN}L$RESET"
+        logn "${YL}L$RESET"
         logf "Assuming $l is a lib - not uninstalling"
       else
         U=$(echo "$USES" | sed -e "s/%%/$l/g")
@@ -285,7 +285,7 @@ Darwin*)
 Linux*)
   log "$BL Info: Running on Linux$RESET"
   hash apt && {
-    #log "${YN}Attention:${RESET} on linux uninstalling of tools is not supported!"
+    #log "${YL}Attention:${RESET} on linux uninstalling of tools is not supported!"
     INSTALLER="apt"
     INSTALL="sudo apt install -y"
     UNINSTALL="sudo apt purge -y"
@@ -299,7 +299,7 @@ Linux*)
 
   }
   hash pacman && {
-    log "${YN}Attention:${RESET} on linux uninstalling of tools is not supported!"
+    log "${YL}Attention:${RESET} on linux uninstalling of tools is not supported!"
     INSTALLER="pacman"
     INSTALL="sudo pacman -Sy"
     USES='pacman -Qi %% | grep "Required By " | grep -v None |tr " " "\n"| wc -l'
