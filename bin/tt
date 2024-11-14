@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 trap cleanup EXIT QUIT TERM
+
 GN='\033[0;32m'
 RD='\033[0;31m'
 BL='\033[0;34m'
@@ -12,6 +13,15 @@ RESET="\033[0m"
 
 ERR=$RD
 WR=$YL
+
+if [ ! -e $(dirname $0)/include.sh ]; then
+  echo "$(dirname $0)/include.sh not found"
+  exit 1
+fi
+source $(dirname $0)/include.sh
+
+cd $(dirname $0)
+BINDIR=$(pwd)
 
 function cleanup() {
   echo "Cleaning up"
@@ -198,33 +208,34 @@ function syncInstall() {
 
 function syncTTtoSystemFiles() {
   log "Updating local files from TT."
-  echo >$TMP/to_copy.lst
+  createEffectiveFilesList $TMP/to_copy.lst
+  #echo >$TMP/to_copy.lst
 
-  for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
-    cat $BASE/configs/$i/files.conf | while read l; do
-      f=$(echo $l | cut -f1 -d\;)
-      d=$(echo $l | cut -f2 -d\;)
-      if [ -z "$f" ]; then
-        continue
-      fi
-      if [[ "$f" =~ "#" ]]; then
-        continue
-      fi
-      #log "Syncing file $f with ~/$d"
-      if [ "$d" != "${d%/}" ]; then
-        #ends with /
-        d=$d$(basename "$f")
-      fi
-      if grep ";$HOME/$d" $TMP/to_copy.lst >/dev/null; then
-        grep -v ";$HOME/$d" $TMP/to_copy.lst >$TMP/to_copy.tmp || {
-          err "error"
-          exit 1
-        }
-        mv $TMP/to_copy.tmp $TMP/to_copy.lst
-      fi
-      echo "$BASE/configs/$i/files/$f;$HOME/$d" >>$TMP/to_copy.lst
-    done
-  done
+  #for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+  #  cat $BASE/configs/$i/files.conf | while read l; do
+  #    f=$(echo $l | cut -f1 -d\;)
+  #    d=$(echo $l | cut -f2 -d\;)
+  #    if [ -z "$f" ]; then
+  #      continue
+  #    fi
+  #    if [[ "$f" =~ "#" ]]; then
+  #      continue
+  #    fi
+  #    #log "Syncing file $f with ~/$d"
+  #    if [ "$d" != "${d%/}" ]; then
+  #      #ends with /
+  #      d=$d$(basename "$f")
+  #    fi
+  #    if grep ";$HOME/$d" $TMP/to_copy.lst >/dev/null; then
+  #      grep -v ";$HOME/$d" $TMP/to_copy.lst >$TMP/to_copy.tmp || {
+  #        err "error"
+  #        exit 1
+  #      }
+  #      mv $TMP/to_copy.tmp $TMP/to_copy.lst
+  #    fi
+  #    echo "$BASE/configs/$i/files/$f;$HOME/$d" >>$TMP/to_copy.lst
+  #  done
+  #done
   cat $TMP/to_copy.lst | while read l; do
     f=$(echo "$l" | cut -f1 -d\;)
     d=$(echo "$l" | cut -f2 -d\;)
@@ -233,28 +244,29 @@ function syncTTtoSystemFiles() {
 }
 
 function updatingTTFromSystemFiles() {
-  log "Updating TT from System."
+  err "Not working atm - need to fix overwriting issue"
+  #log "Updating TT from System."
 
-  for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
-    cat $BASE/configs/$i/files.conf | while read l; do
-      f=$(echo $l | cut -f1 -d\;)
-      d=$(echo $l | cut -f2 -d\;)
-      if [ ! -e "$HOME/$d" ]; then
-        continue
-      fi
-      # TODO: this will likely fail - check needs to check the file, resulting not the config
-      # This will hide all files in the dame dir! not what we want
-      if grep ";$d" $BASE/configs/$HOST/files.conf >/dev/null 2>&1; then
-        # skipping - there is a local version
-        continue
-      fi
-      if [ "$d" != "${d%/}" ]; then
-        #ends with /
-        d=$d$(basename $f)
-      fi
-      syncFile "$BASE/configs/common/files/$f" "$HOME/$d"
-    done
-  done
+  #for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+  #  cat $BASE/configs/$i/files.conf | while read l; do
+  #    f=$(echo $l | cut -f1 -d\;)
+  #    d=$(echo $l | cut -f2 -d\;)
+  #    if [ ! -e "$HOME/$d" ]; then
+  #      continue
+  #    fi
+  #    # TODO: this will likely fail - check needs to check the file, resulting not the config
+  #    # This will hide all files in the dame dir! not what we want
+  #    if grep ";$d" $BASE/configs/$HOST/files.conf >/dev/null 2>&1; then
+  #      # skipping - there is a local version
+  #      continue
+  #    fi
+  #    if [ "$d" != "${d%/}" ]; then
+  #      #ends with /
+  #      d=$d$(basename $f)
+  #    fi
+  #    syncFile "$BASE/configs/common/files/$f" "$HOME/$d"
+  #  done
+  #done
 
 }
 function runLocalInstall() {
@@ -438,80 +450,35 @@ export updateSys="Update local installation $HOST from ToolTamer structure\nupda
 export updateTT="Take a snapshot of current installation\nput files from this installation to ToolTamer"
 export show="Show configuration of ToolTamer"
 
-# if hash fzf; then
-if hash fzf; then
-  opt=$(echo -e "Quit\nShow config\nSnapshot System\nUpdate System" | fzf --height=8 --border-label="ToolTamer 1.0" --border="rounded" --preview="case {} in 'Update System') echo -e \"$updateSys\";; 'Snapshot System') echo -e \"$updateTT\";; 'Show config') echo -e \"$show\";; *) echo \"abort\";; esac")
-  if [ -z "$opt" ] || [ "q$opt" = "qquit" ]; then
-    echo "Exiting..."
+PS3="Choose option -> "
+while true; do
+  o=$(menu "-----> ${CN}Tool${MG}Tamer$RESET ${BL}V1.0$RESET - main menu" "${BL}U${RESET}dtate System" "Snapshot System" "Admin" "Quit")
+  echo "You chose $o"
+  opt=$(echo "$o" | cut -f1 -d:)
+  label=$(echo "$o" | cut -f2 -d:)
+  case "$opt" in
+  "4" | "Q" | "q")
+    log "Exiting..."
     exit 0
-  fi
-else
-
-  select opt in "Update System" "Snapshot System" "Show config" "Quit"; do
-    echo "Chose opt $opt"
+    ;;
+  "1" | "U" | "u")
+    syncInstall
+    syncTTtoSystemFiles
+    runLocalInstall
     break
-  done
-fi
-
-case "$opt" in
-Quit)
-  log "Exiting..."
-  exit 0
-  ;;
-Update\ System)
-  syncInstall
-  syncTTtoSystemFiles
-  runLocalInstall
-  ;;
-Snapshot\ System)
-  updateTTFromInstallation
-  log "updating TT files from this system"
-  updatingTTFromSystemFiles
-  ;;
-Show\ config)
-  cd "$BASE/configs"
-  log "Available configs: "
-  if hash fzf; then
-    c=$(ls | fzf)
-  else
-    select c in *; do
-      break
-    done
-  fi
-  logn "${BL}$c$RESET - "
-  log "tools: $(cat $BASE/configs/$c/to_install.$INSTALL | wc -l)"
-  log "files: $(cat $BASE/configs/$c/files.conf | wc -l)"
-  select o in "Show files" "Show tools"; do
-    case "$o" in
-    "Show files")
-      f=$(fzf <$BASE/configs/$c/files.conf)
-      log "Move file to other config (M), change file settings (C) or delete file (D)?"
-      read a
-      case "$a" in
-      "M")
-        echo "To where?"
-        ;;
-      "C")
-        logn "Current setting: $f"
-        ;;
-      "D")
-        logn "Really delete?"
-        ;;
-      *)
-        err "Unknown option $a"
-        ;;
-      esac
-      log "Info: not doing anything yet"
-      ;;
-    "Show tools")
-      fzf <$BASE/configs/to_install.$INSTALL
-      ;;
-    esac
+    ;;
+  "2" | "s" | "S")
+    updateTTFromInstallation
+    log "updating TT files from this system"
+    updatingTTFromSystemFiles
     break
-  done
-  exit 0
-  ;;
-esac
+    ;;
+  "3" | "a" | "A")
+    $BINDIR/admin
+    ;;
+  esac
+
+done
 
 log "All tasks ${GN}done$RESET"
 

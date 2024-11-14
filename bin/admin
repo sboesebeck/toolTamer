@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+
+source $(dirname $0)/include.sh || exit 1
+
+if [ ! -e $BASE ]; then
+  err "no config dir found - plase call $(dirname $0)/tt to create a default"
+  exit 1
+fi
+
+TMP=/tmp/tt$$
+mkdir $TMP
+touch $TMP/log
+cd $BASE || exit 1
+
+HOST=$(hostname)
+if [ ! -e $BASE/configs/$HOST ]; then
+  err "No config for $HOST - start tt"
+  exit 0
+fi
+
+log "----> ${BL}Tool${YL}Tamer$RESET V1.0 <----"
+
+if ! hash fzf; then
+  err "FZF needs to be installed"
+  exit 1
+fi
+PS3="Choose an option-> "
+o=$(menu "Chose an option" "Move local file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View differences of files" "${YL}quit$RESET")
+log "Option: $o"
+n=${o%%:*}
+o=${o##*:}
+log "Got option ${YL}$o$RESET (number $n)"
+
+case "$n" in
+"1")
+  cd $HOME
+  f=$(fzf -m --border-label="chose file to move to config" --border=rounded)
+  if [ -z $f ]; then
+    log "Abort"
+  else
+    warn "Copying $f to local config for $HOST - ok? (enter/CTRL-C)"
+    read
+    lf=${f#$HOME}
+    lf=${lf#/}
+    lf=${lf#.}
+    if [ -e $BASE/configs/$HOST/files/$lf ]; then
+      prflf=$(shasum <$BASE/configs/$HOST/files/$lf)
+      prf=$(shasum <$f)
+      if [ "$prflf" != "$prf" ]; then
+        log "Checksum differs - copying"
+        cp $f $BASE/configs/$HOST/files/$lf
+      else
+        log "File is identical - not copying"
+      fi
+      if grep $lf $BASE/configs/$HOST/files.conf >/dev/null 2>&1; then
+        log "File is in config"
+      else
+        err "File not in file.conf - ${GN}adding it$RESET"
+        echo "$lf;$f" >>$BASE/configs/$HOST/files.conf
+      fi
+    else
+      log "New file - ${GN}adding$RESET"
+      cp $HOME/$f $BASE/configs/$HOST/files/$lf || exit 1
+      echo "$lf;$f" >>$BASE/configs/$HOST/files.conf
+    fi
+    log "${GN}done$RESET"
+  fi
+  ;;
+"2")
+  cd $BASE/configs
+  ls -1 | fzf
+  ;;
+"3")
+  createEffectiveFilesList $TMP/files.lst
+  cat $TMP/files.lst | while read i; do
+    f=$(echo "$i" | cut -f1 -d\;)
+    d=$(echo "$i" | cut -f2 -d\;)
+    f_sha=$(shasum <"$f")
+    d_sha=$(shasum <"$d")
+    if [ "$f_sha" = "$d_sha" ]; then
+      log "----> file $d... ${GN}ok${RESET}"
+    else
+      log "----> file $d... ${RD}differs$RESET"
+      q=$(menu "Do you want to see diff?" "Yes" "No")
+      o=${q%%:*}
+      l=${q#*:}
+      case "$o" in
+      "1")
+        difft $f $d
+        ;;
+      *) ;;
+      esac
+    fi
+  done
+
+  ;;
+"4")
+  exit
+  ;;
+esac
