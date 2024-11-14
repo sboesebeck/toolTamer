@@ -298,57 +298,7 @@ log "---------> ${CN}Tool${GN}Tamer ${MG}V1.0$RESET <-----------"
 echo " "
 #git pull >/dev/null || exit 1
 
-OS_TYPE="$(uname -s)"
-case "${OS_TYPE}" in
-
-Darwin*)
-  log "$BL Info: Running on macOS$RESET"
-  logn "checking brew.sh...."
-  brew list >/dev/null || {
-    err "brew not installed"
-    exit 1
-  }
-  log "${GN}ok$RESET"
-  INSTALLER="brew"
-  INSTALL="brew install"
-  UNINSTALL="brew uninstall"
-  LIST="brew list -1"
-  USES="brew uses --installed %%"
-  ;;
-Linux*)
-  log "$BL Info: Running on Linux$RESET"
-  hash apt && {
-    #log "${YL}Attention:${RESET} on linux uninstalling of tools is not supported!"
-    INSTALLER="apt"
-    INSTALL="sudo apt install -y"
-    UNINSTALL="sudo apt purge -y"
-    if hash apt-rdepends; then
-      USES="apt-rdepends -r %% 2>/dev/null | grep Reverse"
-    else
-      log "${YL}Warning:$RESET cannot determine dependencies, consider installing apt-rdepends."
-      USES="echo 'no dependencies'"
-    fi
-    LIST="apt list --installed | grep -v Listing... |/usr/bin/cut -f1 -d/"
-
-  }
-  hash pacman && {
-    log "${YL}Attention:${RESET} on linux uninstalling of tools is not supported!"
-    INSTALLER="pacman"
-    INSTALL="sudo pacman -Sy"
-    USES='pacman -Qi %% | grep "Required By " | grep -v None |tr " " "\n"| wc -l'
-    LIST="pacman -Q | awk '{print \$1}'"
-  }
-  if [ -z $INSTALLER ]; then
-    err "no valid package manager found, apt and pacman are supported"
-    exit 1
-  fi
-
-  ;;
-*)
-  echo -e "$ERR Unknown Operating System:$RESET$OS_TYPE"
-  exit 1
-  ;;
-esac
+checkSystem
 
 HOST="$(hostname)"
 log "Trying to tame all tools in all your systems. This is $BL$HOST$RESET - OS is $BL$OS_TYPE$RESET and the installer used here is $BL$INSTALLER$RESET"

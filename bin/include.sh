@@ -67,6 +67,76 @@ function createEffectiveFilesList() {
     done
   done
 }
+
+function getInstalledPackages() {
+  logn "Preparing list of software for $HOST..."
+  for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+    cat $BASE/configs/$c/to_install.$INSTALLER | grep -v "#" >>$1
+  done
+  sort -u $1 >$1.sorted
+  logn "$(wc -l $TMP/to_install.sorted | cut -c1-9) tools to install. "
+  log "${GN}done$RESET"
+  echo
+  log "now: running through all localy installed software"
+  logn "Checking: "
+  bash -c "$LIST" >$2
+}
+
+function checkSystem() {
+
+  OS_TYPE="$(uname -s)"
+  case "${OS_TYPE}" in
+
+  Darwin*)
+    log "$BL Info: Running on macOS$RESET"
+    logn "checking brew.sh...."
+    brew list >/dev/null || {
+      err "brew not installed"
+      exit 1
+    }
+    log "${GN}ok$RESET"
+    INSTALLER="brew"
+    INSTALL="brew install"
+    UNINSTALL="brew uninstall"
+    LIST="brew list -1"
+    USES="brew uses --installed %%"
+    ;;
+  Linux*)
+    log "$BL Info: Running on Linux$RESET"
+    hash apt && {
+      #log "${YL}Attention:${RESET} on linux uninstalling of tools is not supported!"
+      INSTALLER="apt"
+      INSTALL="sudo apt install -y"
+      UNINSTALL="sudo apt purge -y"
+      if hash apt-rdepends; then
+        USES="apt-rdepends -r %% 2>/dev/null | grep Reverse"
+      else
+        log "${YL}Warning:$RESET cannot determine dependencies, consider installing apt-rdepends."
+        USES="echo 'no dependencies'"
+      fi
+      LIST="apt list --installed | grep -v Listing... |/usr/bin/cut -f1 -d/"
+
+    }
+    hash pacman && {
+      log "${YL}Attention:${RESET} on linux uninstalling of tools is not supported!"
+      INSTALLER="pacman"
+      INSTALL="sudo pacman -Sy"
+      USES='pacman -Qi %% | grep "Required By " | grep -v None |tr " " "\n"| wc -l'
+      LIST="pacman -Q | awk '{print \$1}'"
+    }
+    if [ -z $INSTALLER ]; then
+      err "no valid package manager found, apt and pacman are supported"
+      exit 1
+    fi
+
+    ;;
+  *)
+    echo -e "$ERR Unknown Operating System:$RESET$OS_TYPE"
+    exit 1
+    ;;
+  esac
+}
+
 function menu() {
   log "$1" >/dev/tty
   shift

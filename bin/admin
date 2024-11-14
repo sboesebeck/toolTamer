@@ -25,7 +25,7 @@ if ! hash fzf; then
   exit 1
 fi
 PS3="Choose an option-> "
-o=$(menu "Chose an option" "Move local file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View differences of files" "${YL}quit$RESET")
+o=$(menu "Chose an option" "Move local file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View differences of files" "View differences of installed tools" "${YL}quit$RESET")
 log "Option: $o"
 n=${o%%:*}
 o=${o##*:}
@@ -87,6 +87,23 @@ case "$n" in
       case "$o" in
       "1")
         difft $f $d
+        q=$(menu "Add change to ToolTamer or revert the change?" "Add to ToolTamer" "Revert local change" "Ignore")
+        o=${q%%:*}
+        l=${q#*:}
+        case "$o" in
+        "1")
+          cp "$d" "$f"
+          log "File ${BL}$d$RESET was copied to ToolTamer!"
+          ;;
+        "2")
+          cp "$f" "$d"
+          log "File ${BL}$d$RESET was ${YL}replaced$RESET with ToolTamer version!"
+          ;;
+        "3")
+          log "ingoring..."
+          ;;
+        esac
+
         ;;
       *) ;;
       esac
@@ -95,6 +112,40 @@ case "$n" in
 
   ;;
 "4")
+  checkSystem
+  echo "Checking installed packages using $INSTALLER..."
+  getInstalledPackages $TMP/to_install $TMP/installed
+  toInstall=""
+  toRemove=""
+  touch $TMP/missing
+  touch $TMP/exceed
+  cat $TMP/to_install | while read l; do
+    if ! grep $l $TMP/installed >/dev/null; then
+      echo "$l" >>$TMP/missing
+    fi
+  done
+  toInstall=$(sort -u $TMP/missing)
+  cat $TMP/installed | while read l; do
+    if ! grep $l $TMP/to_install >/dev/null; then
+      toRemove="$toRemove $l"
+      echo "$l" >>$TMP/exceed
+    fi
+  done
+  toRemove=$(sort -u $TMP/exceed)
+  if [ -z "$toInstall" ] && [ -z "$toRemove" ]; then
+    log "${GN}All in sync$RESET no differences found"
+  else
+    log "Differences in installation:"
+    if [ ! -z "$toInstall" ]; then
+      log "Packages that should be installed:\n$toInstall"
+    fi
+    if [ ! -z "$toRemove" ]; then
+      log "Packages that will be removed:\n$toRemove"
+    fi
+  fi
+  log "\n${GN}done.$RESET"
+  ;;
+"5")
   exit
   ;;
 esac
