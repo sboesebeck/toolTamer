@@ -151,11 +151,7 @@ function menu() {
     echo -n "$PS3" >/dev/tty
     read key </dev/tty >/dev/null
     idx=$((key - 1))
-    if [ "q${a[$idx]}" != "q" ]; then
-      echo -n "$key:${a[$idx]}"
-      return
-    else
-      err "Unknwon option $key" >/dev/tty
-    fi
+    echo -n "$key:${a[$idx]}"
+    return
   done
 }

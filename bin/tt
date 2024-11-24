@@ -402,12 +402,12 @@ export show="Show configuration of ToolTamer"
 
 PS3="Choose option -> "
 while true; do
-  o=$(menu "-----> ${CN}Tool${MG}Tamer$RESET ${BL}V1.0$RESET - main menu" "${BL}U${RESET}dtate System" "Snapshot System" "Admin" "Quit")
+  o=$(menu "-----> ${CN}Tool${MG}Tamer$RESET ${BL}V1.0$RESET - main menu" "${BL}U${RESET}pdate System - full system update, local files, installation, local install script" "${BL}F${RESET}iles only - update only files" "${BL}S${RESET}napshot System" "Admin" "Quit")
   echo "You chose $o"
   opt=$(echo "$o" | cut -f1 -d:)
-  label=$(echo "$o" | cut -f2 -d:)
+  # label=$(echo "$o" | cut -f2 -d:)
   case "$opt" in
-  "4" | "Q" | "q")
+  "5" | "Q" | "q")
     log "Exiting..."
     exit 0
     ;;
@@ -415,16 +415,20 @@ while true; do
     syncInstall
     syncTTtoSystemFiles
     runLocalInstall
-    break
+    # break
     ;;
-  "2" | "s" | "S")
+  "2" | "F" | "f")
+    syncTTtoSystemFiles
+    # break
+    ;;
+  "3" | "s" | "S")
     updateTTFromInstallation
     log "updating TT files from this system"
     updatingTTFromSystemFiles
-    break
+    # break
     ;;
-  "3" | "a" | "A")
-    $BINDIR/admin
+  "4" | "a" | "A")
+    source $BINDIR/admin.sh
     ;;
   esac
 
