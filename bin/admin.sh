@@ -3,6 +3,74 @@ if [ ! -e $BASE ]; then
   exit 1
 fi
 
+function fixDuplicates() {
+
+  rm -f $TMP/install_check
+  cd $BASE/configs
+  l=$(ls | fzf)
+
+  if [ -z "$l" ]; then
+    return
+  fi
+
+  for pkg in "brew" "apt"; do
+    if [ ! -e $l/to_install.$pkg ]; then
+      continue
+    fi
+
+    for i in $(<$l/to_install.$pkg); do
+      log "Package $i"
+      echo "$i" >>$TMP/install_check
+    done
+
+    for i in $(<$l/includes.conf) common; do
+      for p in $(<$BASE/configs/$i/to_install.$pkg); do
+        if grep "^$p\$" $TMP/install_check; then
+          log "Found duplicate Entry $p - included from $i - ${RD}removing it$RESET"
+          read
+          grep -v "^$p\$" $BASE/configs/$i/to_install.$pkg >$TMP/to_install.tmp && mv $TMP/to_install.tmp $BASE/configs/$i/to_install.$pkg
+        else
+          echo "$p" >>$TMP/install_check
+        fi
+      done
+    done
+  done
+  log "${GN}Checks done$RESET"
+
+}
+
+function showConfig() {
+  rm -f $TMP/install_check
+  cd $BASE/configs
+  l=$(ls | fzf)
+  if [ -z "$l" ]; then
+    return
+  fi
+  for pkg in "brew" "apt"; do
+    if [ ! -e $l/to_install.$pkg ]; then
+      continue
+    fi
+    log "---> SoftwareList $pkg: <--- "
+
+    for i in $(<$l/to_install.$pkg); do
+      log "Package $i"
+      echo "$i" >>$TMP/install_check
+    done
+
+    for i in $(<$l/includes.conf) common; do
+      log "---> Included from $i:"
+      for p in $(<$BASE/configs/$i/to_install.$pkg); do
+        if grep "^$p\$" $TMP/install_check; then
+          log "  DUPLICATE from $i -> $p"
+        else
+          log "  Package from $i -> $p"
+          echo "$p" >>$TMP/install_check
+        fi
+      done
+    done
+  done | fzf --reverse
+}
+
 TMP=/tmp/tt$$
 mkdir $TMP
 touch $TMP/log
@@ -23,13 +91,13 @@ fi
 PS3="Choose an option-> "
 
 while true; do
-  o=$(menu "---> ToolTamer Admin Menu <---" "Move local file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View differences of files" "View differences of installed tools" "${YL}return$RESET")
+  o=$(menu "---> ToolTamer Admin Menu <---" "Move ${BL}l${RESET}ocal file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View ${BL}d${RESET}ifferences of files" "View differences of ${BL}i${RESET}nstalled tools" "Show ${BL}C${RESET}onfig" "${BL}F${RESET}ix duplicate packages" "${YL}return$RESET")
   log "Option: $o"
   n=${o%%:*}
   o=${o##*:}
   log "Got option ${YL}$o$RESET (number $n)"
   case "$n" in
-  "1")
+  "1" | "L" | "l")
     cd $HOME
     f=$(fzf -m --border-label="chose file to move to config" --border=rounded)
     if [ -z $f ]; then
@@ -63,11 +131,11 @@ while true; do
       log "${GN}done$RESET"
     fi
     ;;
-  "2")
+  "2" | "m")
     cd $BASE/configs
     ls -1 | fzf
     ;;
-  "3")
+  "3" | "d" | "D")
     createEffectiveFilesList $TMP/files.lst
     cat $TMP/files.lst | while read i; do
       f=$(echo "$i" | cut -f1 -d\;)
@@ -108,7 +176,7 @@ while true; do
     done
 
     ;;
-  "4")
+  "4" | "i" | "I")
     checkSystem
     echo "Checking installed packages using $INSTALLER..."
     getInstalledPackages $TMP/to_install $TMP/installed
@@ -142,7 +210,13 @@ while true; do
     fi
     log "\n${GN}done.$RESET"
     ;;
-  "5")
+  "5" | "c" | "C")
+    showConfig
+    ;;
+  "6" | "F" | "f")
+    fixDuplicates
+    ;;
+  "7" | "q" | "Q" | "r")
     return
     ;;
   esac
