@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+if [ "q$1" = "q-sh" ]; then
+  cd "$(dirname $0)"
+  echo "export PATH=\$PATH:$(pwd)"
+  exit
+fi
+
 trap cleanup EXIT QUIT TERM
 
 GN='\033[0;32m'
@@ -19,8 +25,14 @@ if [ ! -e $(dirname $0)/include.sh ]; then
   exit 1
 fi
 source $(dirname $0)/include.sh
-
 cd $(dirname $0)
+
+if which tt >/dev/null; then
+  log "tt is in path - ${GN}ok$RESET"
+else
+  log "${YL}Warning:${RESET} ToolTamer not in path - please add the following line to your config:"
+  log "eval \$($(pwd)/tt -sh)"
+fi
 BINDIR=$(pwd)
 
 function cleanup() {
@@ -403,7 +415,7 @@ export show="Show configuration of ToolTamer"
 PS3="Choose option -> "
 while true; do
   o=$(menu "-----> ${CN}Tool${MG}Tamer$RESET ${BL}V1.0$RESET - main menu" "${BL}U${RESET}pdate System - full system update, local files, installation, local install script" "${BL}F${RESET}iles only - update only files" "${BL}S${RESET}napshot System" "Admin" "Quit")
-  echo "You chose $o"
+  log "You chose $o"
   opt=$(echo "$o" | cut -f1 -d:)
   # label=$(echo "$o" | cut -f2 -d:)
   case "$opt" in

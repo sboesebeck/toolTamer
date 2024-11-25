@@ -18,19 +18,12 @@ function fixDuplicates() {
       continue
     fi
 
-    for i in $(<$l/to_install.$pkg); do
-      log "Package $i"
-      echo "$i" >>$TMP/install_check
-    done
-
     for i in $(<$l/includes.conf) common; do
       for p in $(<$BASE/configs/$i/to_install.$pkg); do
-        if grep "^$p\$" $TMP/install_check; then
+        if grep "^$p\$" $l/to_install.$pkg; then
           log "Found duplicate Entry $p - included from $i - ${RD}removing it$RESET"
           read
-          grep -v "^$p\$" $BASE/configs/$i/to_install.$pkg >$TMP/to_install.tmp && mv $TMP/to_install.tmp $BASE/configs/$i/to_install.$pkg
-        else
-          echo "$p" >>$TMP/install_check
+          grep -v "^$p\$" $l/to_install.$pkg >$TMP/to_install.tmp && mv $TMP/to_install.tmp $l/to_install.$pkg
         fi
       done
     done
@@ -91,7 +84,7 @@ fi
 PS3="Choose an option-> "
 
 while true; do
-  o=$(menu "---> ToolTamer Admin Menu <---" "Move ${BL}l${RESET}ocal file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View ${BL}d${RESET}ifferences of files" "View differences of ${BL}i${RESET}nstalled tools" "Show ${BL}C${RESET}onfig" "${BL}F${RESET}ix duplicate packages" "${YL}return$RESET")
+  o=$(menu "---> ToolTamer Admin Menu <---" "Move ${BL}l${RESET}ocal file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View ${BL}d${RESET}ifferences of files" "View differences of ${BL}i${RESET}nstalled tools" "Show ${BL}C${RESET}onfig" "${BL}F${RESET}ix duplicate packages" "${BL}G${RESET}it view" "${YL}return$RESET")
   log "Option: $o"
   n=${o%%:*}
   o=${o##*:}
@@ -216,7 +209,13 @@ while true; do
   "6" | "F" | "f")
     fixDuplicates
     ;;
-  "7" | "q" | "Q" | "r")
+  "7" | "g" | "G")
+    {
+      cd $BASE/
+      lazygit
+    }
+    ;;
+  "8" | "q" | "Q" | "r")
     return
     ;;
   esac
