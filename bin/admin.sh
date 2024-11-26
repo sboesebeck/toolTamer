@@ -133,6 +133,13 @@ while true; do
     cat $TMP/files.lst | while read i; do
       f=$(echo "$i" | cut -f1 -d\;)
       d=$(echo "$i" | cut -f2 -d\;)
+      if [ -z "$f" ]; then 
+        continue
+      fi
+      if [ ! -e "$f" ]; then 
+        echo "referenced file $f does not exist"
+        continue 
+      fi
       f_sha=$(shasum <"$f")
       d_sha=$(shasum <"$d")
       if [ "$f_sha" = "$d_sha" ]; then
