@@ -133,12 +133,12 @@ while true; do
     cat $TMP/files.lst | while read i; do
       f=$(echo "$i" | cut -f1 -d\;)
       d=$(echo "$i" | cut -f2 -d\;)
-      if [ -z "$f" ]; then 
+      if [ -z "$f" ]; then
         continue
       fi
-      if [ ! -e "$f" ]; then 
+      if [ ! -e "$f" ]; then
         echo "referenced file $f does not exist"
-        continue 
+        continue
       fi
       f_sha=$(shasum <"$f")
       d_sha=$(shasum <"$d")
@@ -208,6 +208,66 @@ while true; do
         log "Packages that will be removed:\n$toRemove"
       fi
     fi
+    while true; do
+      o=$(menu "Do you want to install missing packages?" "Yes" "No")
+      n=${o%%:*}
+      o=${o##*:}
+
+      case "$n" in
+      "1" | "y" | "Yes" | "Y")
+        err "not implemented yet - sorry"
+        break
+        ;;
+      "2" | "n" | "No" | "N")
+        break
+        ;;
+      *)
+        log "Hä?"
+        ;;
+      esac
+    done
+    while true; do
+      o=$(menu "Do you want to remove installed packages?" "Yes" "No")
+      n=${o%%:*}
+      o=${o##*:}
+
+      case "$n" in
+      "1" | "y" | "Yes" | "Y")
+        lst=$(echo "$toRemove" | fzf -m)
+        log "${YL}Removing$RESET: $lst"
+        $UNINSTALL $lst
+        break
+        ;;
+      "2" | "n" | "No" | "N")
+        break
+        ;;
+      *)
+        log "Hä?"
+        ;;
+      esac
+    done
+    while true; do
+      o=$(menu "Do you want to Add installed packages to ToolTamer?" "Yes" "No")
+      n=${o%%:*}
+      o=${o##*:}
+
+      case "$n" in
+      "1" | "y" | "Yes" | "Y")
+        lst=$(echo "$toRemove" | fzf -m)
+        log "${YL}adding$RESET: $lst"
+        for i in $lst; do
+          echo "$i" >>$BASE/configs/$HOST/to_install.$INSTALLER
+        done
+        break
+        ;;
+      "2" | "n" | "No" | "N")
+        break
+        ;;
+      *)
+        log "Hä?"
+        ;;
+      esac
+    done
     log "\n${GN}done.$RESET"
     ;;
   "5" | "c" | "C")
