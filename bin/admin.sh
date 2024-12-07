@@ -93,24 +93,25 @@ while true; do
   "1" | "L" | "l")
     cd $HOME
     f=$(fzf -m --border-label="chose file to move to config" --border=rounded)
-    if [ -z $f ]; then
+    if [ -z "$f" ]; then
       log "Abort"
     else
-      warn "Copying $f to local config for $HOST - ok? (enter/CTRL-C)"
+      warn "Copying '$f' to local config for $HOST - ok? (enter/CTRL-C)"
       read
-      lf=${f#$HOME}
-      lf=${lf#/}
-      lf=${lf#.}
-      if [ -e $BASE/configs/$HOST/files/$lf ]; then
-        prflf=$(shasum <$BASE/configs/$HOST/files/$lf)
-        prf=$(shasum <$f)
+      # lf=${f#$HOME}
+      # lf=${lf#/}
+      # lf=${lf#.}
+      lf=$(basename "$f")
+      if [ -e "$BASE/configs/$HOST/files/$lf" ]; then
+        prflf=$(shasum <"$BASE/configs/$HOST/files/$lf")
+        prf=$(shasum <"$f")
         if [ "$prflf" != "$prf" ]; then
           log "Checksum differs - copying"
-          cp $f $BASE/configs/$HOST/files/$lf
+          cp "$f" "$BASE/configs/$HOST/files/$lf"
         else
           log "File is identical - not copying"
         fi
-        if grep $lf $BASE/configs/$HOST/files.conf >/dev/null 2>&1; then
+        if grep "$lf" "$BASE/configs/$HOST/files.conf" >/dev/null 2>&1; then
           log "File is in config"
         else
           err "File not in file.conf - ${GN}adding it$RESET"
@@ -118,7 +119,7 @@ while true; do
         fi
       else
         log "New file - ${GN}adding$RESET"
-        cp $HOME/$f $BASE/configs/$HOST/files/$lf || exit 1
+        cp "$HOME/$f" "$BASE/configs/$HOST/files/$lf" || exit 1
         echo "$lf;$f" >>$BASE/configs/$HOST/files.conf
       fi
       log "${GN}done$RESET"
