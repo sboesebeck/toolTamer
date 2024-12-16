@@ -204,6 +204,6 @@ In this case, the file `$HOME/.config/toolTamer/configs/HOSTNAME/files/myzshrc` 
 Comparison is done using `SHA` Checksums!
 
 
-### to_insall.XXX
+### to_install.XXX
 The `to_install` files just contain a list of package names to be ensured on the system. Everything that is installed on the system, that is not a dependency or a lib that is not in that list, will be uninstalled / purged. This way, whenever you try out a tool and forget to uninstall it, ToolTamer will help you with that.
 
