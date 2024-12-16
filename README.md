@@ -83,6 +83,8 @@ eval "$(~/toolTamer/bin/tt -sh)"
    ```bash
    ./bin/tt
    ```
+   or just `tt` if it is in your path.
+
 2. you will be asked for a git url - if you don't want to provide any, just hit enter. You will then be asked to create a default structure in `$HOME/.config/toolTamer`. If you provided an url, it will be checked out in `$HOME/.config/toolTamer`
 3. then a menu will appear. Here you can choose either to apply the config to your system, or take a snapshot from the system and put it in your config
 
