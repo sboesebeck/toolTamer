@@ -120,7 +120,7 @@ function checkSystem() {
     hash pacman && {
       log "${YL}Attention:${RESET} on linux uninstalling of tools is not supported!"
       INSTALLER="pacman"
-      INSTALL="sudo pacman -Sy"
+      INSTALL="sudo pacman -Sy --noconfirm"
       USES='pacman -Qi %% | grep "Required By " | grep -v None |tr " " "\n"| wc -l'
       LIST="pacman -Q | awk '{print \$1}'"
     }
