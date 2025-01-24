@@ -408,6 +408,31 @@ if [ -e $BASE/.git ]; then
   esac
 fi
 
+if [ "q$1" = "q--syncSys" ]; then
+  syncInstall
+  syncTTtoSystemFiles
+  runLocalInstall
+  log "All tasks ${GN}done$RESET"
+  log "Logs:"
+  cat $TMP/log
+  exit 0
+elif [ "q$1" = "q--syncFilesOnly" ]; then
+  syncTTtoSystemFiles
+  log "All tasks ${GN}done$RESET"
+  log "Logs:"
+  cat $TMP/log
+  exit
+elif [ "q$1" = "q--updateToolTamer" ]; then
+  updateTTFromInstallation
+  log "All tasks ${GN}done$RESET"
+  log "Logs:"
+  cat $TMP/log
+  exit
+elif [ "q$1" = "q--admin" ]; then
+  source $BINDIR/admin.sh
+  exit
+fi
+
 export updateSys="Update local installation $HOST from ToolTamer structure\nupdates installed tools, config files on change"
 export updateTT="Take a snapshot of current installation\nput files from this installation to ToolTamer"
 export show="Show configuration of ToolTamer"
