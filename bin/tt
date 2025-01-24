@@ -60,6 +60,9 @@ function logf() {
 }
 
 function syncFile() {
+  if [ -z $1 ] && [ -z $2 ]; then
+    return
+  fi
   dotfile="$1"
   gitfile="$2"
 
