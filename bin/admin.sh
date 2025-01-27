@@ -98,10 +98,10 @@ while true; do
     else
       warn "Copying '$f' to local config for $HOST - ok? (enter/CTRL-C)"
       read
-      # lf=${f#$HOME}
-      # lf=${lf#/}
-      # lf=${lf#.}
-      lf=$(basename "$f")
+      lf=${f#$HOME}
+      lf=$(echo "$lf" | sed -e 's!/!/_/g')
+      # lf=$(basename "$f")
+
       if [ -e "$BASE/configs/$HOST/files/$lf" ]; then
         prflf=$(shasum <"$BASE/configs/$HOST/files/$lf")
         prf=$(shasum <"$f")
