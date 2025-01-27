@@ -102,6 +102,10 @@ while true; do
       lf=$(echo "$lf" | sed -e 's!/!/_/g')
       # lf=$(basename "$f")
 
+      if grep ";$f" $BASE/configs/$HOST/files.conf >/dev/null; then
+        l=$(grep ";$f" $BASE/configs/$HOST/files.conf)
+        lf=${l%%;*}
+      fi
       if [ -e "$BASE/configs/$HOST/files/$lf" ]; then
         prflf=$(shasum <"$BASE/configs/$HOST/files/$lf")
         prf=$(shasum <"$f")
