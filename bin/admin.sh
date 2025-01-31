@@ -65,7 +65,9 @@ function showConfig() {
 }
 
 TMP=/tmp/tt$$
-mkdir $TMP
+if [ ! -e $TMP ]; then
+  mkdir $TMP
+fi
 touch $TMP/log
 cd $BASE || exit 1
 

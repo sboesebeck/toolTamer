@@ -436,7 +436,7 @@ elif [ "q$1" = "q--admin" ]; then
   exit
 elif [ "q$1" != "q" ]; then
   log "Unknown option ${RD}$1${RESET}"
-  log "valid options: --syncFilesOnly | --syncSys | --admin | --updateToolTamer"
+  log "valid options: --syncFilesOnly | --syncSys | --admin | --updateToolTamer | --syncFilesOnly"
   exit 1
 fi
 
