@@ -32,6 +32,45 @@ function fixDuplicates() {
 
 }
 
+function addPackage() {
+  log "Enter package you want to add to local config?"
+  read p
+  if [ -z "$p" ]; then
+    echo "abort"
+    return
+  fi
+  log "Installing $p...."
+  $INSTALL $p >/dev/null || exit 1
+  echo $p >>$BASE/configs/$HOST/to_install.$INSTALLER
+  log "added ${BL}$p$RESET to local installation"
+}
+
+function movePackage() {
+  localConfig=$BASE/configs/$HOST/to_install.$INSTALLER
+  log "Move a ${BL}local$RESET package to an other config"
+  pkgs=$(cat $BASE/configs/$HOST/to_install.$INSTALLER | fzf)
+  cd $BASE/configs
+  dest=$(ls -1 | fzf)
+  echo "you chose $(echo "$pkgs" | wc -w) packages to move to $dest"
+  for p in $pkgs; do
+    log "Moving $BL$p$RESET."
+    if [ ! -e $BASE/configs/$dest/to_install.$INSTALLER ]; then
+      err "$dest not found"
+      continue
+    fi
+    destConfig=$BASE/configs/$dest/to_install.$INSTALLER
+    grep -v "$p" $localConfig >${localConfig}.tmp
+    l1=$(wc -l <${localConfig}.tmp)
+    l2=$(wc -l <${localConfig})
+    ((d = $l2 - $l1))
+    if [ $d -ne 1 ]; then
+      err "Somethign is wrong - too many ($BL$d$RESET) packages removed for $p - ${RD}Aborting$RESET"
+      rm -f ${localConfig}.tmp
+    fi
+    mv ${localConfig}.tmp $localConfig
+    echo "$p" >>$destConfig
+  done
+}
 function showConfig() {
   rm -f $TMP/install_check
   cd $BASE/configs
@@ -86,7 +125,7 @@ fi
 PS3="Choose an option-> "
 
 while true; do
-  o=$(menu "---> ToolTamer Admin Menu <---" "Move ${BL}l${RESET}ocal file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View ${BL}d${RESET}ifferences of files" "View differences of ${BL}i${RESET}nstalled tools" "Show ${BL}C${RESET}onfig" "${BL}F${RESET}ix duplicate packages" "${BL}G${RESET}it view" "${YL}return$RESET")
+  o=$(menu "---> ToolTamer Admin Menu <---" "Move ${BL}l${RESET}ocal file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View ${BL}d${RESET}ifferences of files" "View differences of ${BL}i${RESET}nstalled tools" "Show ${BL}C${RESET}onfig" "${BL}F${RESET}ix duplicate packages" "${BL}G${RESET}it view" "Add ${BL}P${RESET}ackage to installation" "M${BL}o${RESET}ve installed package" "${YL}return$RESET (${BL}q${RESET}/${BL}r$RESET)")
   log "Option: $o"
   n=${o%%:*}
   o=${o##*:}
@@ -289,7 +328,13 @@ while true; do
       lazygit
     }
     ;;
-  "8" | "q" | "Q" | "r")
+  "8" | "p")
+    addPackage
+    ;;
+  "9" | "o")
+    movePackage
+    ;;
+  "10" | "q" | "Q" | "r")
     return
     ;;
   esac
