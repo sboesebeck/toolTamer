@@ -285,7 +285,7 @@ function updatingTTFromSystemFiles() {
 
 }
 function runLocalInstall() {
-  for c in $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+  for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
     if [ -e $BASE/configs/$c/local_install.sh ]; then
       log "Running local installation script from ${BL}$c$RESET settings" | lolcat
       source $BASE/configs/$c/local_install.sh
