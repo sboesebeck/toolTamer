@@ -180,6 +180,13 @@ function sanitize_rel_path() {
   echo "$rel" | sed -e 's!/!/_/g'
 }
 
+function trim_string() {
+  local str="$1"
+  str="${str#"${str%%[![:space:]]*}"}"
+  str="${str%"${str##*[![:space:]]}"}"
+  echo "$str"
+}
+
 function list_available_configs() {
   local choices=()
   if [ -n "$HOST" ]; then
@@ -208,6 +215,68 @@ function ensure_file_mapping_entry() {
   if ! grep -Fq ";$rel" "$conf_file" 2>/dev/null; then
     echo "$stored;$rel" >>"$conf_file"
   fi
+}
+
+function remove_file_mapping_entry() {
+  local config="$1"
+  local stored="$2"
+  local rel="$3"
+  local conf_file="$BASE/configs/$config/files.conf"
+  [ -f "$conf_file" ] || return
+  awk -F';' -v s="$stored" -v t="$rel" '
+  function trim(str) {
+    gsub(/^[ \t]+|[ \t]+$/, "", str)
+    return str
+  }
+  {
+    orig=$0
+    if (trim($1) == s && trim($2) == t) {
+      next
+    }
+    print orig
+  }
+  ' "$conf_file" >"$conf_file.tmp" && mv "$conf_file.tmp" "$conf_file"
+}
+
+function collect_config_file_entries() {
+  local config="$1"
+  local output="$2"
+  local conf_file="$BASE/configs/$config/files.conf"
+  : >"$output"
+  [ -f "$conf_file" ] || return 1
+  while IFS= read -r line; do
+    line=$(echo "$line" | sed 's/\r$//')
+    if [ -z "$line" ] || [[ "$line" =~ ^# ]]; then
+      continue
+    fi
+    local stored="${line%%;*}"
+    local dest="${line#*;}"
+    stored=$(trim_string "$stored")
+    dest=$(trim_string "$dest")
+    if [ -z "$stored" ] || [ -z "$dest" ]; then
+      continue
+    fi
+    echo "$stored;$dest" >>"$output"
+  done <"$conf_file"
+}
+
+function find_stored_for_target() {
+  local config="$1"
+  local rel="$2"
+  local conf_file="$BASE/configs/$config/files.conf"
+  [ -f "$conf_file" ] || return
+  awk -F';' -v t="$rel" '
+  function trim(str) {
+    gsub(/^[ \t]+|[ \t]+$/, "", str)
+    return str
+  }
+  {
+    if (trim($2) == t) {
+      print trim($1)
+      exit
+    }
+  }
+  ' "$conf_file"
 }
 
 function report_existing_entries_for_file() {
@@ -260,6 +329,19 @@ function list_parent_configs_for() {
     done <"$BASE/configs/$cfg/includes.conf"
   fi
   printf "%s\n" "${parents[@]}"
+}
+
+function list_child_configs_for() {
+  local needle="$1"
+  while IFS= read -r cfg; do
+    [ -z "$cfg" ] && continue
+    [ "$cfg" = "$needle" ] && continue
+    local inc_file="$BASE/configs/$cfg/includes.conf"
+    [ -f "$inc_file" ] || continue
+    if grep -Fxq "$needle" "$inc_file"; then
+      echo "$cfg"
+    fi
+  done < <(ls -1 "$BASE/configs")
 }
 
 function normalize_pkg_line() {
@@ -489,6 +571,42 @@ function add_local_file_to_tooltamer() {
   cd "$original_dir" || true
 }
 
+function select_destination_config() {
+  local source="$1"
+  local parents=()
+  local children=()
+  if [ -n "$source" ]; then
+    mapfile -t parents < <(list_parent_configs_for "$source")
+    mapfile -t children < <(list_child_configs_for "$source")
+  fi
+  local options=()
+  while IFS= read -r cfg; do
+    [ -z "$cfg" ] && continue
+    [ "$cfg" = "$source" ] && continue
+    local tag="[config]"
+    if array_contains_value "$cfg" "${parents[@]}"; then
+      tag="[parent]"
+    elif array_contains_value "$cfg" "${children[@]}"; then
+      tag="[child]"
+    elif [ "$cfg" = "common" ]; then
+      tag="[common]"
+    elif [ "$cfg" = "$HOST" ]; then
+      tag="[host]"
+    fi
+    options+=("$cfg"$'\t'"$tag $cfg")
+  done < <(ls -1 "$BASE/configs")
+  if [ "${#options[@]}" -eq 0 ]; then
+    echo ""
+    return
+  fi
+  local selection
+  selection=$(printf "%s\n" "${options[@]}" | fzf --with-nth=2 --prompt="destination> " --header="Select destination config") || {
+    echo ""
+    return
+  }
+  echo "${selection%%$'\t'*}"
+}
+
 function reviewManagedFileDiffs() {
   createEffectiveFilesList $TMP/files.lst
   while true; do
@@ -560,6 +678,146 @@ function reviewManagedFileDiffs() {
   done
 }
 
+function move_files_between_configs() {
+  local source
+  source=$(ls -1 "$BASE/configs" | fzf --prompt="source config> " --header="Choose config to move/copy files from")
+  if [ -z "$source" ]; then
+    log "Abort"
+    pause_admin
+    return
+  fi
+
+  local entries_file="$TMP/${source}_file_entries"
+  if ! collect_config_file_entries "$source" "$entries_file"; then
+    log "${YL}No files.conf found$RESET for ${BL}$source$RESET"
+    pause_admin
+    return
+  fi
+  if [ ! -s "$entries_file" ]; then
+    log "${YL}No files listed$RESET in ${BL}$source$RESET"
+    pause_admin
+    return
+  fi
+
+  local selection_file="$TMP/${source}_file_choices"
+  >"$selection_file"
+  while IFS=';' read -r stored dest; do
+    [ -z "$stored" ] && continue
+    [ -z "$dest" ] && continue
+    local repo_file="$BASE/configs/$source/files/$stored"
+    local display="$dest (${stored})"
+    echo "$stored|$dest|$repo_file"$'\t'"$display" >>"$selection_file"
+  done <"$entries_file"
+  if [ ! -s "$selection_file" ]; then
+    log "${YL}No file artifacts found$RESET for ${BL}$source$RESET"
+    pause_admin
+    return
+  fi
+
+  local preview_cmd="bash -c 'line=\"\$1\"; data=\$(printf \"%s\" \"\$line\" | cut -f1); file=\${data##*|}; if [ -f \"\$file\" ]; then sed -n \"1,160p\" \"\$file\"; else echo \"File not found: \$file\"; fi' _ {}"
+  local selected_lines=()
+  if ! mapfile -t selected_lines < <(fzf --multi --with-nth=2 --prompt="files> " --header="Select file(s) from ${source}" --preview="$preview_cmd" --height=80% <"$selection_file"); then
+    log "No files selected."
+    pause_admin
+    return
+  fi
+  if [ "${#selected_lines[@]}" -eq 0 ]; then
+    log "No files selected."
+    pause_admin
+    return
+  fi
+
+  local destination
+  destination=$(select_destination_config "$source")
+  if [ -z "$destination" ]; then
+    log "Abort"
+    pause_admin
+    return
+  fi
+
+  local action
+  if ! action=$(menu "Transfer mode" "Move (remove from ${source})" "Copy (keep in ${source})"); then
+    pause_admin
+    return
+  fi
+  local move_mode=false
+  if [ "${action%%:*}" = "1" ]; then
+    move_mode=true
+  fi
+
+  local transferred=0
+  for line in "${selected_lines[@]}"; do
+    [ -z "$line" ] && continue
+    local data=${line%%$'\t'*}
+    IFS='|' read -r stored dest repo <<<"$data"
+    if [ -z "$stored" ] || [ -z "$dest" ]; then
+      continue
+    fi
+    if [ ! -f "$repo" ]; then
+      warn "Source file ${BL}$repo$RESET missing - skipping."
+      continue
+    fi
+    local existing_stored
+    existing_stored=$(find_stored_for_target "$destination" "$dest")
+    local dest_stored
+    local dest_file
+    local skip=false
+    if [ -n "$existing_stored" ]; then
+      dest_stored="$existing_stored"
+      dest_file="$BASE/configs/$destination/files/$existing_stored"
+      while true; do
+        local conflict
+        conflict=$(menu "Destination ${destination} already has ${dest}" "Overwrite with source" "Skip" "View diff")
+        case "${conflict%%:*}" in
+        "1")
+          mkdir -p "$(dirname "$dest_file")"
+          cp "$repo" "$dest_file"
+          break
+          ;;
+        "2")
+          skip=true
+          break
+          ;;
+        "3")
+          if [ -f "$dest_file" ]; then
+            show_file_diff_viewer "$dest_file" "$repo"
+          else
+            warn "Destination file $dest_file missing."
+          fi
+          ;;
+        *)
+          ;;
+        esac
+      done
+      if [ "$skip" = true ]; then
+        continue
+      fi
+    else
+      dest_stored=$(sanitize_rel_path "$dest")
+      dest_file="$BASE/configs/$destination/files/$dest_stored"
+      mkdir -p "$(dirname "$dest_file")"
+      cp "$repo" "$dest_file"
+      ensure_file_mapping_entry "$destination" "$dest_stored" "$dest"
+    fi
+
+    if [ "$move_mode" = true ]; then
+      remove_file_mapping_entry "$source" "$stored" "$dest"
+      rm -f "$repo"
+      log "${YL}Moved${RESET} ${BL}$dest$RESET from ${source} -> ${destination}"
+    else
+      log "${GN}Copied${RESET} ${BL}$dest$RESET from ${source} -> ${destination}"
+    fi
+    ((transferred = transferred + 1))
+  done
+
+  if [ "$transferred" -eq 0 ]; then
+    log "${YL}No files were transferred.$RESET"
+  else
+    log "${GN}$transferred file(s) transferred$RESET from ${BL}$source$RESET to ${BL}$destination$RESET"
+  fi
+  pause_admin
+}
+
 TMP=/tmp/tt$$
 if [ ! -e $TMP ]; then
   mkdir $TMP
@@ -599,8 +857,7 @@ while true; do
     add_local_file_to_tooltamer
     ;;
   "2" | "m")
-    cd $BASE/configs
-    ls -1 | fzf
+    move_files_between_configs
     ;;
   "3" | "d" | "D")
     reviewManagedFileDiffs
