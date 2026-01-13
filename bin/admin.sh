@@ -593,14 +593,20 @@ function select_destination_config() {
     elif [ "$cfg" = "$HOST" ]; then
       tag="[host]"
     fi
-    options+=("$cfg"$'\t'"$tag $cfg")
+    local label="$tag $cfg"
+    if array_contains_value "$cfg" "${parents[@]}"; then
+      label="$label (parent)"
+    elif array_contains_value "$cfg" "${children[@]}"; then
+      label="$label (child)"
+    fi
+    options+=("$cfg"$'\t'"$label")
   done < <(ls -1 "$BASE/configs")
   if [ "${#options[@]}" -eq 0 ]; then
     echo ""
     return
   fi
   local selection
-  selection=$(printf "%s\n" "${options[@]}" | fzf --with-nth=2 --prompt="destination> " --header="Select destination config") || {
+  selection=$(printf "%s\n" "${options[@]}" | fzf --with-nth=2.. --prompt="destination> " --header="Select destination config") || {
     echo ""
     return
   }
