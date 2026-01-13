@@ -5,31 +5,72 @@ fi
 
 function fixDuplicates() {
 
-  rm -f $TMP/install_check
-  cd $BASE/configs
-  l=$(ls | fzf)
+  cd $BASE/configs || return
+  local config
+  config=$(ls | fzf --prompt="Select config for duplicate cleanup> ")
 
-  if [ -z "$l" ]; then
+  if [ -z "$config" ]; then
     return
   fi
 
-  for pkg in "brew" "apt"; do
-    if [ ! -e $l/to_install.$pkg ]; then
-      continue
-    fi
+  local report="$TMP/${config}_duplicate_report"
+  >"$report"
 
-    for i in $(<$l/includes.conf) common; do
-      for p in $(<$BASE/configs/$i/to_install.$pkg); do
-        if grep "^$p\$" $l/to_install.$pkg; then
-          log "Found duplicate Entry $p - included from $i - ${RD}removing it$RESET"
-          read
-          grep -v "^$p\$" $l/to_install.$pkg >$TMP/to_install.tmp && mv $TMP/to_install.tmp $l/to_install.$pkg
-        fi
-      done
-    done
+  for pkg in "brew" "apt" "pacman"; do
+    find_package_duplicates_for_config "$config" "$pkg" "$report"
   done
-  log "${GN}Checks done$RESET"
 
+  if [ ! -s "$report" ]; then
+    log "${GN}No duplicate packages found$RESET for ${BL}$config$RESET"
+    return
+  fi
+
+  log "Duplicate packages detected for ${BL}$config$RESET:"
+  local display="$TMP/${config}_dup_display"
+  >"$display"
+  while IFS=';' read -r pkgtype pkg reason; do
+    case "$reason" in
+    parent:*)
+      local parent=${reason#parent:}
+      log "  [$pkgtype] ${BL}$pkg$RESET already exists in ${CN}$parent$RESET"
+      echo "$pkgtype;$pkg;$reason;[$pkgtype] $pkg (in parent $parent)" >>"$display"
+      ;;
+    local)
+      log "  [$pkgtype] ${BL}$pkg$RESET is listed multiple times in ${CN}$config$RESET"
+      echo "$pkgtype;$pkg;$reason;[$pkgtype] $pkg (duplicated locally)" >>"$display"
+      ;;
+    esac
+  done <"$report"
+
+  local chosen_lines=()
+  if ! mapfile -t chosen_lines < <(cat "$display" | fzf --ansi --multi --with-nth=4 --prompt="remove> " --header="Select duplicates to remove from ${config} (TAB to toggle, CTRL-A for all, ESC to cancel)"); then
+    log "No packages selected for removal."
+    pause_admin
+    return
+  fi
+  if [ "${#chosen_lines[@]}" -eq 0 ]; then
+    log "No packages selected for removal."
+    pause_admin
+    return
+  fi
+
+  rm -f $TMP/${config}_*_selected_parent $TMP/${config}_*_selected_local 2>/dev/null
+  for line in "${chosen_lines[@]}"; do
+    IFS=';' read -r pkgtype pkg reason desc <<<"$line"
+    [ -z "$pkgtype" ] && continue
+    case "$reason" in
+    parent:*)
+      echo "$pkg" >>"$TMP/${config}_${pkgtype}_selected_parent"
+      ;;
+    local)
+      echo "$pkg" >>"$TMP/${config}_${pkgtype}_selected_local"
+      ;;
+    esac
+  done
+
+  apply_package_duplicate_cleanup "$config"
+  log "${GN}Duplicate cleanup complete.$RESET"
+  pause_admin
 }
 
 function addPackage() {
@@ -204,12 +245,172 @@ function report_existing_entries_for_file() {
   return $have_entries
 }
 
+function list_parent_configs_for() {
+  local cfg="$1"
+  local parents=()
+  if [ "$cfg" = "common" ]; then
+    return
+  fi
+  parents+=("common")
+  if [ -f "$BASE/configs/$cfg/includes.conf" ]; then
+    while IFS= read -r inc; do
+      inc=$(echo "$inc" | sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+      [ -z "$inc" ] && continue
+      array_contains_value "$inc" "${parents[@]}" || parents+=("$inc")
+    done <"$BASE/configs/$cfg/includes.conf"
+  fi
+  printf "%s\n" "${parents[@]}"
+}
+
+function normalize_pkg_line() {
+  echo "$1" | sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+function build_parent_package_map() {
+  local cfg="$1"
+  local pkgtype="$2"
+  local output="$3"
+  : >"$output"
+  while IFS= read -r parent; do
+    [ -z "$parent" ] && continue
+    local parent_file="$BASE/configs/$parent/to_install.$pkgtype"
+    [ -f "$parent_file" ] || continue
+    while IFS= read -r line; do
+      local pkg=$(normalize_pkg_line "$line")
+      [ -z "$pkg" ] && continue
+      echo "$pkg;$parent" >>"$output"
+    done <"$parent_file"
+  done < <(list_parent_configs_for "$cfg")
+  if [ -s "$output" ]; then
+    sort -u "$output" -o "$output"
+  fi
+}
+
+function find_package_duplicates_for_config() {
+  local cfg="$1"
+  local pkgtype="$2"
+  local report="$3"
+  local config_file="$BASE/configs/$cfg/to_install.$pkgtype"
+  [ -f "$config_file" ] || return
+
+  local parent_map="$TMP/${cfg}_${pkgtype}_parent_map"
+  local parent_dup="$TMP/${cfg}_${pkgtype}_parent_found"
+  local local_dup="$TMP/${cfg}_${pkgtype}_local_found"
+  local seen_file="$TMP/${cfg}_${pkgtype}_seen"
+  : >"$parent_dup"
+  : >"$local_dup"
+  : >"$seen_file"
+
+  build_parent_package_map "$cfg" "$pkgtype" "$parent_map"
+
+  while IFS= read -r line; do
+    local pkg=$(normalize_pkg_line "$line")
+    [ -z "$pkg" ] && continue
+    if [ -s "$parent_map" ] && grep -Fq "^$pkg;" "$parent_map"; then
+      local parent=$(grep -F "^$pkg;" "$parent_map" | head -n1)
+      parent=${parent#*;}
+      if ! grep -Fxq "$pkg" "$parent_dup"; then
+        echo "$pkg" >>"$parent_dup"
+        echo "$pkgtype;$pkg;parent:$parent" >>"$report"
+      fi
+      continue
+    fi
+    if grep -Fxq "$pkg" "$seen_file"; then
+      if ! grep -Fxq "$pkg" "$local_dup"; then
+        echo "$pkg" >>"$local_dup"
+        echo "$pkgtype;$pkg;local" >>"$report"
+      fi
+      continue
+    fi
+    echo "$pkg" >>"$seen_file"
+  done <"$config_file"
+
+  rm -f "$seen_file" "$parent_map" "$parent_dup" "$local_dup"
+}
+
+function deduplicate_package_file() {
+  local file="$1"
+  local list_file="$2"
+  local tmp="$file.tmp"
+  local targets=""
+  if [ -n "$list_file" ] && [ -f "$list_file" ]; then
+    targets=$(tr '\n' ' ' <"$list_file")
+  fi
+  awk -v targets="$targets" '
+  function trim(str) {
+    sub(/^[ \t]+/, "", str)
+    sub(/[ \t]+$/, "", str)
+    return str
+  }
+  BEGIN {
+    if (targets != "") {
+      split(targets, arr, " ")
+      for (i in arr) {
+        if (arr[i] != "")
+          wanted[arr[i]] = 1
+      }
+    }
+  }
+  {
+    orig=$0
+    trimmed=trim(orig)
+    if (trimmed == "" || trimmed ~ /^#/) {
+      print orig
+      next
+    }
+    if (targets == "") {
+      if (!seen_all[trimmed]++) {
+        print orig
+      }
+      next
+    }
+    if (!wanted[trimmed]) {
+      print orig
+      next
+    }
+    seen_partial[trimmed]++
+    if (seen_partial[trimmed] == 1) {
+      print orig
+    }
+  }
+  ' "$file" >"$tmp"
+  mv "$tmp" "$file"
+}
+
+function apply_package_duplicate_cleanup() {
+  local cfg="$1"
+  local managers=("brew" "apt" "pacman")
+  for pkgtype in "${managers[@]}"; do
+    local config_file="$BASE/configs/$cfg/to_install.$pkgtype"
+    [ -f "$config_file" ] || continue
+    local parent_dup="$TMP/${cfg}_${pkgtype}_selected_parent"
+    local local_dup="$TMP/${cfg}_${pkgtype}_selected_local"
+    if [ -f "$parent_dup" ]; then
+      local tmp="$config_file.tmp"
+      cp "$config_file" "$tmp"
+      while IFS= read -r pkg; do
+        [ -z "$pkg" ] && continue
+        grep -v -x "$pkg" "$tmp" >"$tmp.filtered" && mv "$tmp.filtered" "$tmp"
+      done <"$parent_dup"
+      mv "$tmp" "$config_file"
+      rm -f "$parent_dup"
+      log "  Removed parent duplicates from ${BL}$cfg$RESET [$pkgtype]"
+    fi
+    if [ -f "$local_dup" ]; then
+      deduplicate_package_file "$config_file" "$local_dup"
+      rm -f "$local_dup"
+      log "  Removed repeated entries inside ${BL}$cfg$RESET [$pkgtype]"
+    fi
+    rm -f "$TMP/${cfg}_${pkgtype}_parent_map"
+  done
+}
+
 function add_local_file_to_tooltamer() {
   local original_dir
   original_dir=$(pwd)
   cd "$HOME" || return
   local selection
-  selection=$(fzf --border-label="Choose file to add" --preview='[ -f {} ] && command tail -n +1 {} | head -n 200' --height=80%) || {
+  selection=$(fzf --border-label="Choose file to add" --preview='[ -f {} ] && sed -n "1,200p" "{}"' --height=80%) || {
     log "Abort"
     cd "$original_dir" || true
     return
@@ -233,7 +434,11 @@ function add_local_file_to_tooltamer() {
 
   report_existing_entries_for_file "$selection"
 
-  mapfile -t config_choices < <(list_available_configs)
+  local config_choices=()
+  while IFS= read -r cfg; do
+    [ -z "$cfg" ] && continue
+    config_choices+=("$cfg")
+  done < <(list_available_configs)
   local dest_config
   dest_config=$(printf "%s\n" "${config_choices[@]}" | fzf --prompt="config> " --header="Select destination config for $selection") || {
     log "Abort"
