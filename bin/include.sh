@@ -13,6 +13,12 @@ ERR=$RD
 WR=$YL
 export BASE=$HOME/.config/toolTamer/
 
+if command -v fzf >/dev/null 2>&1; then
+  HAVE_FZF=1
+else
+  HAVE_FZF=0
+fi
+
 function cleanup() {
   echo "Cleaning up"
   rm -rf $TMP
@@ -35,6 +41,10 @@ function warn() {
 
 function logf() {
   echo -e "$1" >>$TMP/log
+}
+
+function fzf_available() {
+  [ "${HAVE_FZF:-0}" -eq 1 ]
 }
 
 function createEffectiveFilesList() {
@@ -138,20 +148,39 @@ function checkSystem() {
 }
 
 function menu() {
-  log "$1" >/dev/tty
+  local prompt="$1"
   shift
-  a=("$@")
-  n=1
-  while true; do
-    for i in "$@"; do
-      echo -e "${YL}$n$RESET. $i$RESET" >/dev/tty
-      ((n = n + 1))
+  local options=("$@")
+
+  if fzf_available; then
+    local numbered=()
+    local idx=1
+    for opt in "${options[@]}"; do
+      numbered+=("$(printf "%d:%b" "$idx" "$opt")")
+      ((idx = idx + 1))
     done
-    n=1
-    echo -n "$PS3" >/dev/tty
-    read key </dev/tty >/dev/null
-    idx=$((key - 1))
-    echo -n "$key:${a[$idx]}"
-    return
+    local selection
+    if selection=$(printf "%s\n" "${numbered[@]}" | fzf --ansi --no-sort --no-multi --tac --prompt="> " --header="$(printf '%b' "$prompt")"); then
+      echo "$selection"
+      return 0
+    fi
+    return 1
+  fi
+
+  log "$prompt" >/dev/tty
+  local idx=1
+  for opt in "${options[@]}"; do
+    printf "%b%2d.%b %b\n" "$YL" "$idx" "$RESET" "$opt" >/dev/tty
+    ((idx = idx + 1))
+  done
+
+  while true; do
+    echo -n "${PS3:-Choose option -> }" >/dev/tty
+    read -r key </dev/tty || return 1
+    if [[ "$key" =~ ^[0-9]+$ ]] && [ "$key" -ge 1 ] && [ "$key" -le "${#options[@]}" ]; then
+      echo "$key:${options[$((key - 1))]}"
+      return 0
+    fi
+    warn "Enter a number between 1 and ${#options[@]}"
   done
 }

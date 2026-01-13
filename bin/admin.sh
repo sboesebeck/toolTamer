@@ -103,6 +103,258 @@ function showConfig() {
   done | fzf --reverse
 }
 
+function show_file_diff_viewer() {
+  local repo="$1"
+  local target="$2"
+  if command -v difft >/dev/null 2>&1; then
+    difft "$repo" "$target"
+  else
+    diff -u "$repo" "$target" | less -R
+  fi
+}
+
+function pause_admin() {
+  if [ -t 1 ]; then
+    echo
+    log "${CN}Press enter to return to the list...$RESET"
+    read -r </dev/tty
+    echo
+  fi
+}
+
+function array_contains_value() {
+  local needle="$1"
+  shift
+  for item in "$@"; do
+    if [ "$item" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+function sanitize_rel_path() {
+  local rel="$1"
+  rel="${rel#/}"
+  echo "$rel" | sed -e 's!/!/_/g'
+}
+
+function list_available_configs() {
+  local choices=()
+  if [ -n "$HOST" ]; then
+    choices+=("$HOST")
+  fi
+  if [ -f "$BASE/configs/$HOST/includes.conf" ]; then
+    while IFS= read -r inc; do
+      [ -z "$inc" ] && continue
+      array_contains_value "$inc" "${choices[@]}" || choices+=("$inc")
+    done <"$BASE/configs/$HOST/includes.conf"
+  fi
+  array_contains_value "common" "${choices[@]}" || choices+=("common")
+  while IFS= read -r cfg; do
+    [ -z "$cfg" ] && continue
+    array_contains_value "$cfg" "${choices[@]}" || choices+=("$cfg")
+  done < <(ls -1 "$BASE/configs")
+  printf "%s\n" "${choices[@]}"
+}
+
+function ensure_file_mapping_entry() {
+  local config="$1"
+  local stored="$2"
+  local rel="$3"
+  local conf_file="$BASE/configs/$config/files.conf"
+  touch "$conf_file"
+  if ! grep -Fq ";$rel" "$conf_file" 2>/dev/null; then
+    echo "$stored;$rel" >>"$conf_file"
+  fi
+}
+
+function report_existing_entries_for_file() {
+  local rel="$1"
+  local have_entries=0
+  while IFS= read -r cfg; do
+    [ -z "$cfg" ] && continue
+    local conf_file="$BASE/configs/$cfg/files.conf"
+    [ -f "$conf_file" ] || continue
+    while IFS=';' read -r stored dest; do
+      [ -z "$stored" ] && continue
+      [[ "$stored" =~ ^# ]] && continue
+      if [ "$dest" = "$rel" ]; then
+        have_entries=1
+        local repo_file="$BASE/configs/$cfg/files/$stored"
+        if [ -f "$repo_file" ]; then
+          local repo_hash
+          local sys_hash
+          repo_hash=$(shasum <"$repo_file")
+          sys_hash=$(shasum <"$HOME/$rel")
+          if [ "$repo_hash" = "$sys_hash" ]; then
+            log "${GN}File already matches$RESET in config ${BL}$cfg$RESET (${repo_file##$BASE/configs/})"
+          else
+            log "${YL}Difference detected$RESET with config ${BL}$cfg$RESET (${repo_file##$BASE/configs/})"
+            show_file_diff_viewer "$repo_file" "$HOME/$rel"
+            pause_admin
+          fi
+        else
+          warn "Entry for $rel found in $cfg, but file $repo_file is missing"
+        fi
+        break
+      fi
+    done <"$conf_file"
+  done < <(ls -1 "$BASE/configs")
+  return $have_entries
+}
+
+function add_local_file_to_tooltamer() {
+  local original_dir
+  original_dir=$(pwd)
+  cd "$HOME" || return
+  local selection
+  selection=$(fzf --border-label="Choose file to add" --preview='[ -f {} ] && command tail -n +1 {} | head -n 200' --height=80%) || {
+    log "Abort"
+    cd "$original_dir" || true
+    return
+  }
+  if [ -z "$selection" ]; then
+    log "Abort"
+    cd "$original_dir" || true
+    return
+  fi
+  if [ -d "$selection" ]; then
+    err "Directory selection is not supported yet."
+    cd "$original_dir" || true
+    return
+  fi
+  local abs="$HOME/$selection"
+  if [ ! -f "$abs" ]; then
+    err "File $abs not found"
+    cd "$original_dir" || true
+    return
+  fi
+
+  report_existing_entries_for_file "$selection"
+
+  mapfile -t config_choices < <(list_available_configs)
+  local dest_config
+  dest_config=$(printf "%s\n" "${config_choices[@]}" | fzf --prompt="config> " --header="Select destination config for $selection") || {
+    log "Abort"
+    cd "$original_dir" || true
+    return
+  }
+  if [ -z "$dest_config" ]; then
+    log "Abort"
+    cd "$original_dir" || true
+    return
+  fi
+
+  local stored_name
+  stored_name=$(sanitize_rel_path "$selection")
+  local dest_dir="$BASE/configs/$dest_config/files"
+  mkdir -p "$dest_dir"
+  local repo_file="$dest_dir/$stored_name"
+
+  if [ -f "$repo_file" ]; then
+    local action
+    action=$(menu "File already exists in ${dest_config}. Replace with local version?" "Replace version in ToolTamer" "Keep current ToolTamer version" "View diff and decide later") || {
+      cd "$original_dir" || true
+      return
+    }
+    case "${action%%:*}" in
+    "1")
+      cp "$abs" "$repo_file"
+      ;;
+    "2")
+      log "Keeping existing ToolTamer version for $selection"
+      cd "$original_dir" || true
+      return
+      ;;
+    "3")
+      show_file_diff_viewer "$repo_file" "$abs"
+      pause_admin
+      cd "$original_dir" || true
+      return
+      ;;
+    esac
+  else
+    cp "$abs" "$repo_file"
+  fi
+
+  ensure_file_mapping_entry "$dest_config" "$stored_name" "$selection"
+  log "${GN}Added${RESET} ${BL}$selection$RESET to config ${CN}$dest_config$RESET"
+  pause_admin
+  cd "$original_dir" || true
+}
+
+function reviewManagedFileDiffs() {
+  createEffectiveFilesList $TMP/files.lst
+  while true; do
+    local entries=()
+    local lines=()
+    local idx=0
+    while IFS= read -r entry; do
+      [ -z "$entry" ] && continue
+      local repo="${entry%%;*}"
+      local target="${entry##*;}"
+      if [ -z "$repo" ] || [ -z "$target" ]; then
+        continue
+      fi
+      if [ ! -e "$repo" ] || [ ! -e "$target" ]; then
+        continue
+      fi
+      local repo_hash
+      local target_hash
+      repo_hash=$(shasum <"$repo")
+      target_hash=$(shasum <"$target")
+      if [ "$repo_hash" = "$target_hash" ]; then
+        continue
+      fi
+      entries[idx]="$repo;$target"
+      local target_disp="${target#$HOME/}"
+      if [ "$target_disp" = "$target" ]; then
+        target_disp="$target"
+      else
+        target_disp="~/$target_disp"
+      fi
+      local repo_disp="${repo##$BASE/configs/}"
+      lines[idx]="${idx}\t${BL}${target_disp}${RESET} ${MG}<->${RESET} ${repo_disp}"
+      ((idx = idx + 1))
+    done < $TMP/files.lst
+
+    if [ "${#entries[@]}" -eq 0 ]; then
+      log "${GN}All tracked files are in sync$RESET"
+      return
+    fi
+
+    local selection
+    selection=$(printf "%b\n" "${lines[@]}" | fzf --ansi --with-nth=2.. --prompt="diff> " --header="Select a file to inspect (ESC to exit)") || return
+    local sel_idx=${selection%%$'\t'*}
+    if [ -z "$sel_idx" ]; then
+      return
+    fi
+    local meta="${entries[$sel_idx]}"
+    local repo="${meta%%;*}"
+    local target="${meta##*;}"
+    show_file_diff_viewer "$repo" "$target"
+    pause_admin
+    local action
+    if ! action=$(menu "Apply change for ${target#$HOME/}?" "Add to ToolTamer" "Revert local change" "Ignore"); then
+      continue
+    fi
+    case "${action%%:*}" in
+    "1")
+      cp "$target" "$repo"
+      log "${GN}Copied$RESET $target -> $repo"
+      ;;
+    "2")
+      cp "$repo" "$target"
+      log "${YL}Reverted$RESET $target from ToolTamer"
+      ;;
+    *)
+      log "Ignoring change for $target"
+      ;;
+    esac
+  done
+}
+
 TMP=/tmp/tt$$
 if [ ! -e $TMP ]; then
   mkdir $TMP
@@ -125,102 +377,28 @@ fi
 PS3="Choose an option-> "
 
 while true; do
-  o=$(menu "---> ToolTamer Admin Menu <---" "Move ${BL}l${RESET}ocal file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View ${BL}d${RESET}ifferences of files" "View differences of ${BL}i${RESET}nstalled tools" "Show ${BL}C${RESET}onfig" "${BL}F${RESET}ix duplicate packages" "${BL}G${RESET}it view" "Add ${BL}P${RESET}ackage to installation" "M${BL}o${RESET}ve installed package" "${YL}return$RESET (${BL}q${RESET}/${BL}r$RESET)")
+  if ! o=$(menu "---> ToolTamer Admin Menu <---" "Move ${BL}l${RESET}ocal file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View ${BL}d${RESET}ifferences of files" "View differences of ${BL}i${RESET}nstalled tools" "Show ${BL}C${RESET}onfig" "${BL}F${RESET}ix duplicate packages" "${BL}G${RESET}it view" "Add ${BL}P${RESET}ackage to installation" "M${BL}o${RESET}ve installed package" "${YL}return$RESET (${BL}q${RESET}/${BL}r$RESET)"); then
+    log "Leaving admin menu."
+    break
+  fi
+  if [ -z "$o" ]; then
+    log "Leaving admin menu."
+    break
+  fi
   log "Option: $o"
   n=${o%%:*}
   o=${o##*:}
   log "Got option ${YL}$o$RESET (number $n)"
   case "$n" in
   "1" | "L" | "l")
-    cd $HOME
-    f=$(fzf -m --border-label="chose file to move to config" --border=rounded)
-    if [ -z "$f" ]; then
-      log "Abort"
-    else
-      warn "Copying '$f' to local config for $HOST - ok? (enter/CTRL-C)"
-      read
-      lf=${f#$HOME}
-      lf=$(echo "$lf" | sed -e 's!/!/_/g')
-      # lf=$(basename "$f")
-
-      if grep ";$f" $BASE/configs/$HOST/files.conf >/dev/null; then
-        l=$(grep ";$f" $BASE/configs/$HOST/files.conf)
-        lf=${l%%;*}
-      fi
-      if [ -e "$BASE/configs/$HOST/files/$lf" ]; then
-        prflf=$(shasum <"$BASE/configs/$HOST/files/$lf")
-        prf=$(shasum <"$f")
-        if [ "$prflf" != "$prf" ]; then
-          log "Checksum differs - copying"
-          cp "$f" "$BASE/configs/$HOST/files/$lf"
-        else
-          log "File is identical - not copying"
-        fi
-        if grep "$lf" "$BASE/configs/$HOST/files.conf" >/dev/null 2>&1; then
-          log "File is in config"
-        else
-          err "File not in file.conf - ${GN}adding it$RESET"
-          echo "$lf;$f" >>$BASE/configs/$HOST/files.conf
-        fi
-      else
-        log "New file - ${GN}adding$RESET"
-        cp "$HOME/$f" "$BASE/configs/$HOST/files/$lf" || exit 1
-        echo "$lf;$f" >>$BASE/configs/$HOST/files.conf
-      fi
-      log "${GN}done$RESET"
-    fi
+    add_local_file_to_tooltamer
     ;;
   "2" | "m")
     cd $BASE/configs
     ls -1 | fzf
     ;;
   "3" | "d" | "D")
-    createEffectiveFilesList $TMP/files.lst
-    cat $TMP/files.lst | while read i; do
-      f=$(echo "$i" | cut -f1 -d\;)
-      d=$(echo "$i" | cut -f2 -d\;)
-      if [ -z "$f" ]; then
-        continue
-      fi
-      if [ ! -e "$f" ]; then
-        echo "referenced file $f does not exist"
-        continue
-      fi
-      f_sha=$(shasum <"$f")
-      d_sha=$(shasum <"$d")
-      if [ "$f_sha" = "$d_sha" ]; then
-        log "----> file $d... ${GN}ok${RESET}"
-      else
-        log "----> file $d... ${RD}differs$RESET"
-        q=$(menu "Do you want to see diff?" "Yes" "No")
-        o=${q%%:*}
-        l=${q#*:}
-        case "$o" in
-        "1")
-          difft $f $d
-          q=$(menu "Add change to ToolTamer or revert the change?" "Add to ToolTamer" "Revert local change" "Ignore")
-          o=${q%%:*}
-          l=${q#*:}
-          case "$o" in
-          "1")
-            cp "$d" "$f"
-            log "File ${BL}$d$RESET was copied to ToolTamer!"
-            ;;
-          "2")
-            cp "$f" "$d"
-            log "File ${BL}$d$RESET was ${YL}replaced$RESET with ToolTamer version!"
-            ;;
-          "3")
-            log "ingoring..."
-            ;;
-          esac
-
-          ;;
-        *) ;;
-        esac
-      fi
-    done
-
+    reviewManagedFileDiffs
     ;;
   "4" | "i" | "I")
     checkSystem
@@ -279,9 +457,13 @@ while true; do
 
       case "$n" in
       "1" | "y" | "Yes" | "Y")
-        lst=$(echo "$toRemove" | fzf -m)
-        log "${YL}Removing$RESET: $lst"
-        $UNINSTALL $lst
+        lst=$(printf "%s\n" "$toRemove" | fzf -m)
+        if [ $? -ne 0 ] || [ -z "$lst" ]; then
+          log "${YL}No packages selected$RESET - skipping removal"
+        else
+          log "${YL}Removing$RESET: $lst"
+          $UNINSTALL $lst
+        fi
         break
         ;;
       "2" | "n" | "No" | "N")
@@ -299,11 +481,15 @@ while true; do
 
       case "$n" in
       "1" | "y" | "Yes" | "Y")
-        lst=$(echo "$toRemove" | fzf -m)
-        log "${YL}adding$RESET: $lst"
-        for i in $lst; do
-          echo "$i" >>$BASE/configs/$HOST/to_install.$INSTALLER
-        done
+        lst=$(printf "%s\n" "$toRemove" | fzf -m)
+        if [ $? -ne 0 ] || [ -z "$lst" ]; then
+          log "${YL}No packages selected$RESET - not adding anything."
+        else
+          log "${YL}adding$RESET: $lst"
+          for i in $lst; do
+            echo "$i" >>$BASE/configs/$HOST/to_install.$INSTALLER
+          done
+        fi
         break
         ;;
       "2" | "n" | "No" | "N")
@@ -315,24 +501,30 @@ while true; do
       esac
     done
     log "\n${GN}done.$RESET"
+    pause_admin
     ;;
   "5" | "c" | "C")
     showConfig
+    pause_admin
     ;;
   "6" | "F" | "f")
     fixDuplicates
+    pause_admin
     ;;
   "7" | "g" | "G")
     {
       cd $BASE/
       lazygit
     }
+    pause_admin
     ;;
   "8" | "p")
     addPackage
+    pause_admin
     ;;
   "9" | "o")
     movePackage
+    pause_admin
     ;;
   "10" | "q" | "Q" | "r")
     return

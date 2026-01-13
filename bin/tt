@@ -59,6 +59,138 @@ function logf() {
   echo -e "$1" >>$TMP/log
 }
 
+function show_help() {
+  cat <<EOF
+ToolTamer - automate installing tools and syncing configuration files.
+
+Usage: $(basename "$0") [option]
+
+Options
+  --syncSys         Install/uninstall packages, sync managed files, and run local installers.
+  --syncFilesOnly   Update managed files without touching packages.
+  --updateToolTamer Snapshot package list into ToolTamer (installed tools only).
+  --updateToolTamerFiles Snapshot package list and managed files into ToolTamer.
+  --admin           Open the admin helper menu (moving files, deduping packages, etc.).
+  -h, --help        Show this help text and exit.
+
+No option starts the interactive menu. If fzf is installed, the menu uses an fzf picker (with colors) for navigation.
+EOF
+}
+
+DEFAULT_CONFIG_PATTERNS=()
+DEFAULT_PATTERN_FALLBACK=(
+  ".bashrc"
+  ".bash_profile"
+  ".bash_aliases"
+  ".profile"
+  ".zshrc"
+  ".zlogin"
+  ".zlogout"
+  ".zprofile"
+  ".zshenv"
+  ".gitconfig"
+  ".ssh/config"
+)
+
+function tt_relpath_from_home() {
+  local path="$1"
+  local rel="${path#$HOME/}"
+  if [ "$rel" = "$path" ]; then
+    rel="${path#$HOME}"
+  fi
+  rel="${rel#/}"
+  if [ -z "$rel" ]; then
+    rel=$(basename "$path")
+  fi
+  echo "$rel"
+}
+
+function add_file_to_config_store() {
+  local config_name="$1"
+  local source="$2"
+  local dest="$3"
+  if [ ! -f "$source" ]; then
+    return 1
+  fi
+  local config_dir="$BASE/configs/$config_name"
+  local files_dir="$config_dir/files"
+  local files_conf="$config_dir/files.conf"
+  if [ ! -e "$files_conf" ]; then
+    touch "$files_conf"
+  fi
+  local rel
+  rel=$(tt_relpath_from_home "$dest")
+  local repo_file="$files_dir/$rel"
+  mkdir -p "$(dirname "$repo_file")"
+  local action="updated"
+  if [ ! -e "$repo_file" ]; then
+    action="added"
+  else
+    local src_hash
+    local repo_hash
+    src_hash=$(shasum <"$source")
+    repo_hash=$(shasum <"$repo_file")
+    if [ "$src_hash" = "$repo_hash" ]; then
+      if ! grep -Fq ";$dest" "$files_conf" 2>/dev/null; then
+        echo "$rel;$dest" >>"$files_conf"
+      fi
+      return 1
+    fi
+  fi
+  cp "$source" "$repo_file"
+  if ! grep -Fq ";$dest" "$files_conf" 2>/dev/null; then
+    echo "$rel;$dest" >>"$files_conf"
+  fi
+  local action_label="Updated"
+  if [ "$action" = "added" ]; then
+    action_label="Added"
+  fi
+  log "  ${GN}$action_label$RESET ${BL}$dest$RESET for ${BL}$config_name$RESET"
+  return 0
+}
+
+function seed_default_config_files() {
+  local config_name="$1"
+  local config_dir="$BASE/configs/$config_name"
+  local files_conf="$config_dir/files.conf"
+  if [ ! -e "$files_conf" ]; then
+    touch "$files_conf"
+  fi
+  if [ -s "$files_conf" ]; then
+    return
+  fi
+  log "Seeding default config files for ${BL}$config_name$RESET"
+  local added=0
+  for pattern in "${DEFAULT_CONFIG_PATTERNS[@]}"; do
+    while IFS= read -r match; do
+      [ -z "$match" ] && continue
+      add_file_to_config_store "$config_name" "$match" "$match" && added=1
+    done < <(compgen -G "$HOME/$pattern" 2>/dev/null || true)
+  done
+  if [ -d "$HOME/.config" ]; then
+    while IFS= read -r cfg_file; do
+      [ -z "$cfg_file" ] && continue
+      case "$cfg_file" in
+      *.conf | *.cfg | *.ini | *.toml | *.yaml | *.yml | *.json | *.vim | */config)
+        add_file_to_config_store "$config_name" "$cfg_file" "$cfg_file" && added=1
+        ;;
+      esac
+    done < <(find "$HOME/.config" -maxdepth 2 -type f 2>/dev/null)
+  fi
+  if [ "$added" -eq 0 ]; then
+    log "  ${YL}No default files$RESET detected under $HOME for $config_name"
+  fi
+}
+
+function pause_before_menu() {
+  if [ -t 1 ]; then
+    echo
+    log "${CN}Press enter to return to the menu...$RESET"
+    read -r </dev/tty
+    echo
+  fi
+}
+
 function syncFile() {
   if [ -z "$1" ] && [ -z "$2" ]; then
     return
@@ -259,30 +391,51 @@ function syncTTtoSystemFiles() {
 }
 
 function updatingTTFromSystemFiles() {
-  err "Not working atm - need to fix overwriting issue"
-  #log "Updating TT from System."
-
-  #for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
-  #  cat $BASE/configs/$i/files.conf | while read l; do
-  #    f=$(echo $l | cut -f1 -d\;)
-  #    d=$(echo $l | cut -f2 -d\;)
-  #    if [ ! -e "$HOME/$d" ]; then
-  #      continue
-  #    fi
-  #    # TODO: this will likely fail - check needs to check the file, resulting not the config
-  #    # This will hide all files in the dame dir! not what we want
-  #    if grep ";$d" $BASE/configs/$HOST/files.conf >/dev/null 2>&1; then
-  #      # skipping - there is a local version
-  #      continue
-  #    fi
-  #    if [ "$d" != "${d%/}" ]; then
-  #      #ends with /
-  #      d=$d$(basename $f)
-  #    fi
-  #    syncFile "$BASE/configs/common/files/$f" "$HOME/$d"
-  #  done
-  #done
-
+  log "Updating ToolTamer files from this system."
+  createEffectiveFilesList $TMP/to_copy.lst
+  local updated=0
+  local skipped=0
+  while IFS= read -r entry; do
+    if [ -z "$entry" ]; then
+      continue
+    fi
+    local gitfile="${entry%%;*}"
+    local dotfile="${entry##*;}"
+    if [ -z "$gitfile" ] || [ -z "$dotfile" ]; then
+      continue
+    fi
+    if [ ! -e "$dotfile" ]; then
+      log "  ${YL}Skip${RESET} missing $dotfile"
+      ((skipped = skipped + 1))
+      continue
+    fi
+    if [ -d "$dotfile" ]; then
+      log "  ${YL}Skip${RESET} $dotfile (directory sync not supported)"
+      ((skipped = skipped + 1))
+      continue
+    fi
+    mkdir -p "$(dirname "$gitfile")"
+    if [ -e "$gitfile" ]; then
+      local sys_hash
+      local repo_hash
+      sys_hash=$(shasum <"$dotfile")
+      repo_hash=$(shasum <"$gitfile")
+      if [ "$sys_hash" = "$repo_hash" ]; then
+        continue
+      fi
+    fi
+    cp "$dotfile" "$gitfile"
+    log "  ${GN}Captured${RESET} ${dotfile#$HOME/} -> ${gitfile##$BASE/configs/}"
+    ((updated = updated + 1))
+  done < $TMP/to_copy.lst
+  if [ "$updated" -eq 0 ]; then
+    log "${YL}No file changes${RESET} detected for ToolTamer."
+  else
+    log "${GN}Updated $updated file(s)$RESET from this system."
+  fi
+  if [ "$skipped" -gt 0 ]; then
+    log "${YL}Skipped $skipped file(s)$RESET (missing or unsupported types)."
+  fi
 }
 function runLocalInstall() {
   for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
@@ -334,9 +487,28 @@ if [ ! -e $BASE ]; then
     mkdir -p $BASE/configs/common/files
     touch $BASE/configs/common/to_install.brew
     touch $BASE/configs/common/to_install.apt
-    touch $BASE/tt.conf
-    echo "# automatically update configs from repo. Valid values are true, false and ask."
-    echo "GIT_AUTO_UPDATE=ask" >>$BASE/tt.conf
+cat <<'EOF' >$BASE/tt.conf
+# automatically update configs from repo. Valid values are true, false and ask.
+GIT_AUTO_UPDATE=ask
+
+# Set to true to skip seeding default files when creating a new host config.
+TT_DISABLE_PATTERN_FALLBACK=false
+
+# Default file patterns to import when creating a new host config. Override here if desired.
+DEFAULT_CONFIG_PATTERNS=(
+  ".bashrc"
+  ".bash_profile"
+  ".bash_aliases"
+  ".profile"
+  ".zshrc"
+  ".zlogin"
+  ".zlogout"
+  ".zprofile"
+  ".zshenv"
+  ".gitconfig"
+  ".ssh/config"
+)
+EOF
 
     mkdir -p $BASE/configs/$HOST/files
     touch $BASE/configs/$HOST/files.conf
@@ -346,6 +518,7 @@ if [ ! -e $BASE ]; then
       touch $BASE/configs/$HOST/taps
     fi
 
+    seed_default_config_files "$HOST"
     log "done"
 
     echo "Configuration for common/$HOST created. But this is only a start - please have a closer look at $BASE/config/$HOST" | lolcat
@@ -353,6 +526,11 @@ if [ ! -e $BASE ]; then
 fi
 GIT_AUTO_UPDATE=ask
 source $BASE/tt.conf
+
+TT_DISABLE_PATTERN_FALLBACK=${TT_DISABLE_PATTERN_FALLBACK:-false}
+if [ ${#DEFAULT_CONFIG_PATTERNS[@]} -eq 0 ] && [ "$TT_DISABLE_PATTERN_FALLBACK" != "true" ]; then
+  DEFAULT_CONFIG_PATTERNS=("${DEFAULT_PATTERN_FALLBACK[@]}")
+fi
 
 if [ -e $BASE/configs/$HOST ]; then
   log "There is a config for this machine available"
@@ -367,6 +545,7 @@ else
     touch $BASE/configs/$HOST/taps
   fi
 
+  seed_default_config_files "$HOST"
   log "done"
 
   echo "Configuration for $HOST created. But this is only a start - please have a closer look at $BASE/config/$HOST" | lolcat
@@ -411,33 +590,53 @@ if [ -e $BASE/.git ]; then
   esac
 fi
 
-if [ "q$1" = "q--syncSys" ]; then
-  syncInstall
-  syncTTtoSystemFiles
-  runLocalInstall
-  log "All tasks ${GN}done$RESET"
-  log "Logs:"
-  cat $TMP/log
-  exit 0
-elif [ "q$1" = "q--syncFilesOnly" ]; then
-  syncTTtoSystemFiles
-  log "All tasks ${GN}done$RESET"
-  log "Logs:"
-  cat $TMP/log
-  exit
-elif [ "q$1" = "q--updateToolTamer" ]; then
-  updateTTFromInstallation
-  log "All tasks ${GN}done$RESET"
-  log "Logs:"
-  cat $TMP/log
-  exit
-elif [ "q$1" = "q--admin" ]; then
-  source $BINDIR/admin.sh
-  exit
-elif [ "q$1" != "q" ]; then
-  log "Unknown option ${RD}$1${RESET}"
-  log "valid options: --syncFilesOnly | --syncSys | --admin | --updateToolTamer | --syncFilesOnly"
-  exit 1
+if [ $# -gt 0 ]; then
+  case "$1" in
+  --syncSys)
+    syncInstall
+    syncTTtoSystemFiles
+    runLocalInstall
+    log "All tasks ${GN}done$RESET"
+    log "Logs:"
+    cat $TMP/log
+    exit 0
+    ;;
+  --syncFilesOnly)
+    syncTTtoSystemFiles
+    log "All tasks ${GN}done$RESET"
+    log "Logs:"
+    cat $TMP/log
+    exit 0
+    ;;
+  --updateToolTamer)
+    updateTTFromInstallation
+    log "All tasks ${GN}done$RESET"
+    log "Logs:"
+    cat $TMP/log
+    exit 0
+    ;;
+  --updateToolTamerFiles)
+    updateTTFromInstallation
+    updatingTTFromSystemFiles
+    log "All tasks ${GN}done$RESET"
+    log "Logs:"
+    cat $TMP/log
+    exit 0
+    ;;
+  --admin)
+    source $BINDIR/admin.sh
+    exit 0
+    ;;
+  -h | --help)
+    show_help
+    exit 0
+    ;;
+  *)
+    err "Unknown option '$1'"
+    show_help
+    exit 1
+    ;;
+  esac
 fi
 
 export updateSys="Update local installation $HOST from ToolTamer structure\nupdates installed tools, config files on change"
@@ -446,7 +645,14 @@ export show="Show configuration of ToolTamer"
 
 PS3="Choose option -> "
 while true; do
-  o=$(menu "-----> ${CN}Tool${MG}Tamer$RESET ${BL}V1.0$RESET - main menu" "${BL}U${RESET}pdate System - full system update, local files, installation, local install script" "${BL}F${RESET}iles only - update only files" "${BL}S${RESET}napshot System" "Admin" "Quit")
+  if ! o=$(menu "-----> ${CN}Tool${MG}Tamer$RESET ${BL}V1.0$RESET - main menu" "${BL}U${RESET}pdate System - full system update, local files, installation, local install script" "${BL}F${RESET}iles only - update only files" "${BL}S${RESET}napshot System" "Admin" "Quit"); then
+    log "Menu closed - exiting."
+    break
+  fi
+  if [ -z "$o" ]; then
+    log "Menu closed - exiting."
+    break
+  fi
   log "You chose $o"
   opt=$(echo "$o" | cut -f1 -d:)
   # label=$(echo "$o" | cut -f2 -d:)
@@ -459,17 +665,17 @@ while true; do
     syncInstall
     syncTTtoSystemFiles
     runLocalInstall
-    # break
+    pause_before_menu
     ;;
   "2" | "F" | "f")
     syncTTtoSystemFiles
-    # break
+    pause_before_menu
     ;;
   "3" | "s" | "S")
     updateTTFromInstallation
     log "updating TT files from this system"
     updatingTTFromSystemFiles
-    # break
+    pause_before_menu
     ;;
   "4" | "a" | "A")
     source $BINDIR/admin.sh
