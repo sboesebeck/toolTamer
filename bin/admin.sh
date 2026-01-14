@@ -29,21 +29,23 @@ function fixDuplicates() {
   local display="$TMP/${config}_dup_display"
   >"$display"
   while IFS=';' read -r pkgtype pkg reason; do
+    local desc=""
     case "$reason" in
     parent:*)
       local parent=${reason#parent:}
       log "  [$pkgtype] ${BL}$pkg$RESET already exists in ${CN}$parent$RESET"
-      echo "$pkgtype;$pkg;$reason;[$pkgtype] $pkg (in parent $parent)" >>"$display"
+      desc="[$pkgtype] $pkg (in parent $parent)"
       ;;
     local)
       log "  [$pkgtype] ${BL}$pkg$RESET is listed multiple times in ${CN}$config$RESET"
-      echo "$pkgtype;$pkg;$reason;[$pkgtype] $pkg (duplicated locally)" >>"$display"
+      desc="[$pkgtype] $pkg (duplicated locally)"
       ;;
     esac
+    echo "$pkgtype;$pkg;$reason;$desc" >>"$display"
   done <"$report"
 
   local chosen_lines=()
-  if ! mapfile -t chosen_lines < <(cat "$display" | fzf --ansi --multi --with-nth=4 --prompt="remove> " --header="Select duplicates to remove from ${config} (TAB to toggle, CTRL-A for all, ESC to cancel)"); then
+  if ! mapfile -t chosen_lines < <(cat "$display" | fzf --ansi --multi --delimiter=';' --with-nth=4 --prompt="remove> " --header="Select duplicates to remove from ${config} (TAB to toggle, CTRL-A for all, ESC to cancel)"); then
     log "No packages selected for removal."
     pause_admin
     return
