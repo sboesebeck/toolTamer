@@ -114,6 +114,178 @@ function movePackage() {
     echo "$p" >>$destConfig
   done
 }
+
+function package_exists_in_file() {
+  local pkg="$1"
+  local file="$2"
+  [ -f "$file" ] || return 1
+  awk -v target="$pkg" '
+  function trim(str) {
+    sub(/^[ \t]+/, "", str)
+    sub(/[ \t]+$/, "", str)
+    return str
+  }
+  {
+    line=$0
+    sub(/#.*$/, "", line)
+    line=trim(line)
+    if (line == target) {
+      found=1
+      exit
+    }
+  }
+  END {
+    exit(found ? 0 : 1)
+  }
+  ' "$file"
+}
+
+function add_package_to_file() {
+  local pkg="$1"
+  local file="$2"
+  touch "$file"
+  if package_exists_in_file "$pkg" "$file"; then
+    return 1
+  fi
+  echo "$pkg" >>"$file"
+}
+
+function remove_package_from_file() {
+  local pkg="$1"
+  local file="$2"
+  [ -f "$file" ] || return 1
+  local tmp="${file}.tmp"
+  awk -v target="$pkg" '
+  function trim(str) {
+    sub(/^[ \t]+/, "", str)
+    sub(/[ \t]+$/, "", str)
+    return str
+  }
+  {
+    line=$0
+    stripped=line
+    sub(/#.*$/, "", stripped)
+    stripped=trim(stripped)
+    if (stripped == target) {
+      next
+    }
+    print line
+  }
+  ' "$file" >"$tmp"
+  if cmp -s "$file" "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$file"
+  return 0
+}
+
+function promote_or_copy_package_hierarchy() {
+  local source
+  source=$(list_available_configs | fzf --prompt="Source config> ")
+  if [ -z "$source" ]; then
+    return
+  fi
+
+  local source_file="$BASE/configs/$source/to_install.$INSTALLER"
+  if [ ! -f "$source_file" ]; then
+    err "No package list found for $source ($INSTALLER)"
+    return
+  fi
+
+  local pkg_list
+  pkg_list=$(awk '
+  function trim(str) {
+    sub(/^[ \t]+/, "", str)
+    sub(/[ \t]+$/, "", str)
+    return str
+  }
+  {
+    line=$0
+    sub(/#.*$/, "", line)
+    line=trim(line)
+    if (line != "") {
+      print line
+    }
+  }
+  ' "$source_file" | sort -u)
+
+  if [ -z "$pkg_list" ]; then
+    warn "No packages available in $source"
+    return
+  fi
+
+  local pkgs
+  pkgs=$(printf "%s\n" "$pkg_list" | fzf -m --prompt="Select package(s)> ")
+  if [ -z "$pkgs" ]; then
+    log "No packages selected."
+    return
+  fi
+
+  local action
+  if ! action=$(menu "Package hierarchy action" "Move to ${BL}parent$RESET config (upper)" "Copy to other ${BL}configs$RESET (branches)" "Cancel"); then
+    return
+  fi
+  local choice=${action%%:*}
+
+  case "$choice" in
+  "1")
+    local parents
+    parents=$(list_parent_configs_for "$source")
+    if [ -z "$parents" ]; then
+      warn "No parent configs found for $source"
+      return
+    fi
+    local dest
+    dest=$(printf "%s\n" "$parents" | fzf --prompt="Move to parent> ")
+    if [ -z "$dest" ]; then
+      return
+    fi
+    local dest_file="$BASE/configs/$dest/to_install.$INSTALLER"
+    local moved=0
+    local skipped=0
+    for p in $pkgs; do
+      if add_package_to_file "$p" "$dest_file"; then
+        log "Added ${BL}$p$RESET to ${CN}$dest$RESET"
+      else
+        log "Already in ${CN}$dest$RESET: ${BL}$p$RESET"
+      fi
+      if remove_package_from_file "$p" "$source_file"; then
+        log "Removed ${BL}$p$RESET from ${CN}$source$RESET"
+        ((moved = moved + 1))
+      else
+        log "Not found in ${CN}$source$RESET: ${BL}$p$RESET"
+        ((skipped = skipped + 1))
+      fi
+    done
+    log "${GN}Move complete$RESET (${moved} moved, ${skipped} skipped)"
+    ;;
+  "2")
+    local dests
+    dests=$(list_available_configs | awk -v src="$source" '$0 != src' | fzf -m --prompt="Copy to configs> " --header="Select destinations (TAB to toggle)")
+    if [ -z "$dests" ]; then
+      return
+    fi
+    local copied=0
+    local exists=0
+    for d in $dests; do
+      local dest_file="$BASE/configs/$d/to_install.$INSTALLER"
+      for p in $pkgs; do
+        if add_package_to_file "$p" "$dest_file"; then
+          log "Copied ${BL}$p$RESET to ${CN}$d$RESET"
+          ((copied = copied + 1))
+        else
+          ((exists = exists + 1))
+        fi
+      done
+    done
+    log "${GN}Copy complete$RESET (${copied} added, ${exists} already present)"
+    ;;
+  *)
+    return
+    ;;
+  esac
+}
 function showConfig() {
   rm -f $TMP/install_check
   cd $BASE/configs
@@ -848,7 +1020,7 @@ fi
 PS3="Choose an option-> "
 
 while true; do
-  if ! o=$(menu "---> ToolTamer Admin Menu <---" "Move ${BL}l${RESET}ocal file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View ${BL}d${RESET}ifferences of files" "View differences of ${BL}i${RESET}nstalled tools" "Show ${BL}C${RESET}onfig" "${BL}F${RESET}ix duplicate packages" "${BL}G${RESET}it view" "Add ${BL}P${RESET}ackage to installation" "M${BL}o${RESET}ve installed package" "${YL}return$RESET (${BL}q${RESET}/${BL}r$RESET)"); then
+  if ! o=$(menu "---> ToolTamer Admin Menu <---" "Move ${BL}l${RESET}ocal file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View ${BL}d${RESET}ifferences of files" "View differences of ${BL}i${RESET}nstalled tools" "Show ${BL}C${RESET}onfig" "${BL}F${RESET}ix duplicate packages" "${BL}G${RESET}it view" "Add ${BL}P${RESET}ackage to installation" "M${BL}o${RESET}ve installed package" "${BL}H${RESET}ierarchy package actions (move/copy)" "${YL}return$RESET (${BL}q${RESET}/${BL}r$RESET)"); then
     log "Leaving admin menu."
     break
   fi
@@ -996,7 +1168,11 @@ while true; do
     movePackage
     pause_admin
     ;;
-  "10" | "q" | "Q" | "r")
+  "10" | "h" | "H")
+    promote_or_copy_package_hierarchy
+    pause_admin
+    ;;
+  "11" | "q" | "Q" | "r")
     return
     ;;
   esac
