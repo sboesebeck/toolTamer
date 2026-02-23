@@ -687,7 +687,33 @@
 </ul>
 <h3 id="package-differences">Package differences<a class="headerlink" href="#package-differences" title="Permanent link">&para;</a></h3>
 <p><code>tt --admin</code> → <strong>"View differences of installed tools"</strong></p>
-<p>Shows packages that would be installed or removed. You can decide for each.</p>
+<p>Shows packages that are missing (in config but not installed) or excess (installed but not in config). Use TAB to multi-select, then:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>F1</strong></td>
+<td>Install selected missing packages</td>
+</tr>
+<tr>
+<td><strong>F3</strong></td>
+<td>Remove selected excess packages from system</td>
+</tr>
+<tr>
+<td><strong>F5</strong></td>
+<td>Add selected excess packages to ToolTamer config</td>
+</tr>
+<tr>
+<td><strong>F7</strong></td>
+<td>Remove selected missing packages from ToolTamer config</td>
+</tr>
+</tbody>
+</table>
 <h2 id="use-tooltamer-without-interaction">Use ToolTamer without interaction<a class="headerlink" href="#use-tooltamer-without-interaction" title="Permanent link">&para;</a></h2>
 <p>For scripting or cron jobs:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>tt<span class="w"> </span>--syncSys<span class="w">            </span><span class="c1"># Full sync (packages + files + local_install.sh)</span>
