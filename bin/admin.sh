@@ -1169,8 +1169,8 @@ while true; do
           --preview-label=" Package Info " \
           --preview-window=right:50%:wrap \
           --border-label=" Package Differences " \
-          --expect="ctrl-i,ctrl-r,ctrl-t" \
-          --header=$'ctrl-i=install missing  ctrl-r=remove excess  ctrl-t=add excess to TT\nTAB=multi-select  ESC=back\n') || break
+          --expect="f1,f3,f5,f7" \
+          --header=$'F1=install missing  F3=remove excess  F5=add to TT  F7=remove from TT\nTAB=multi-select  ESC=back\n') || break
 
         local key selected
         key=$(echo "$result" | head -1)
@@ -1178,7 +1178,7 @@ while true; do
         [ -z "$selected" ] && continue
 
         case "$key" in
-        ctrl-i)
+        f1)
           # Install: only MISSING packages
           local to_act=""
           while IFS= read -r line; do
@@ -1199,7 +1199,7 @@ while true; do
           fi
           break
           ;;
-        ctrl-r)
+        f3)
           # Remove: only EXCESS packages
           local to_act=""
           while IFS= read -r line; do
@@ -1220,7 +1220,7 @@ while true; do
           fi
           break
           ;;
-        ctrl-t)
+        f5)
           # Add to ToolTamer: only EXCESS packages
           local added=0
           while IFS= read -r line; do
@@ -1237,6 +1237,31 @@ while true; do
             fi
           done <<<"$selected"
           log "${GN}$added package(s) added to ToolTamer$RESET"
+          break
+          ;;
+        f7)
+          # Remove from ToolTamer config: only MISSING packages
+          local removed=0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local cat pkg
+            cat=$(echo "$line" | cut -d'|' -f1)
+            pkg=$(echo "$line" | cut -d'|' -f2)
+            if [ "$cat" = "MISSING" ]; then
+              for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+                local cfg="$BASE/configs/$c/to_install.$INSTALLER"
+                [ -f "$cfg" ] || continue
+                if grep -Fxq "$pkg" "$cfg"; then
+                  grep -Fxv "$pkg" "$cfg" >"$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+                  log "${YL}Removed$RESET $pkg from $c/to_install.$INSTALLER"
+                fi
+              done
+              ((removed = removed + 1))
+            else
+              log "${YL}Skipping$RESET $pkg (not a missing package)"
+            fi
+          done <<<"$selected"
+          log "${GN}$removed package(s) removed from ToolTamer$RESET"
           break
           ;;
         *)
