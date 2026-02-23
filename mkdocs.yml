@@ -1,0 +1,42 @@
+site_name: ToolTamer
+site_description: Cross-platform system configuration and package synchronization
+site_url: https://sboesebeck.github.io/toolTamer/
+repo_url: https://github.com/sboesebeck/toolTamer
+repo_name: sboesebeck/toolTamer
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Dark mode
+    - scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Getting Started: getting-started.md
+  - Configuration: configuration.md
+  - How-Tos: howtos.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
