@@ -321,6 +321,7 @@ function showConfig() {
 function show_package_diff_viewer() {
   checkSystem
   echo "Checking installed packages using $INSTALLER..."
+  : >$TMP/to_install
   getInstalledPackages $TMP/to_install $TMP/installed
   : >$TMP/missing
   : >$TMP/exceed
