@@ -175,7 +175,7 @@ function menu() {
         --no-sort --no-multi --tac \
         --border-label=" $prompt " \
         --info=hidden \
-        --height="~${#options[@]}" \
+        --height="~$((${#options[@]} + 4))" \
         --prompt="> "); then
       local num
       num=$(echo "$selection" | sed 's/^ *//' | cut -d. -f1)
