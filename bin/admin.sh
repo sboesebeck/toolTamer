@@ -7,7 +7,7 @@ function fixDuplicates() {
 
   cd $BASE/configs || return
   local config
-  config=$(ls | fzf --prompt="Select config for duplicate cleanup> ")
+  config=$(ls | fzf_themed --prompt="Select config for duplicate cleanup> ")
 
   if [ -z "$config" ]; then
     return
@@ -45,7 +45,7 @@ function fixDuplicates() {
   done <"$report"
 
   local chosen_lines=()
-  if ! mapfile -t chosen_lines < <(cat "$display" | fzf --ansi --multi --delimiter=';' --with-nth=4 --prompt="remove> " --header="Select duplicates to remove from ${config} (TAB to toggle, CTRL-A for all, ESC to cancel)"); then
+  if ! mapfile -t chosen_lines < <(cat "$display" | fzf_themed --multi --delimiter=';' --with-nth=4 --prompt="remove> " --header="Select duplicates to remove from ${config} (TAB to toggle, CTRL-A for all, ESC to cancel)"); then
     log "No packages selected for removal."
     pause_admin
     return
@@ -91,9 +91,9 @@ function addPackage() {
 function movePackage() {
   localConfig=$BASE/configs/$HOST/to_install.$INSTALLER
   log "Move a ${BL}local$RESET package to an other config"
-  pkgs=$(cat $BASE/configs/$HOST/to_install.$INSTALLER | fzf)
+  pkgs=$(cat $BASE/configs/$HOST/to_install.$INSTALLER | fzf_themed)
   cd $BASE/configs
-  dest=$(ls -1 | fzf)
+  dest=$(ls -1 | fzf_themed)
   echo "you chose $(echo "$pkgs" | wc -w) packages to move to $dest"
   for p in $pkgs; do
     log "Moving $BL$p$RESET."
@@ -182,7 +182,7 @@ function remove_package_from_file() {
 
 function promote_or_copy_package_hierarchy() {
   local source
-  source=$(list_available_configs | fzf --prompt="Source config> ")
+  source=$(list_available_configs | fzf_themed --prompt="Source config> ")
   if [ -z "$source" ]; then
     return
   fi
@@ -216,7 +216,7 @@ function promote_or_copy_package_hierarchy() {
   fi
 
   local pkgs
-  pkgs=$(printf "%s\n" "$pkg_list" | fzf -m --prompt="Select package(s)> ")
+  pkgs=$(printf "%s\n" "$pkg_list" | fzf_themed -m --prompt="Select package(s)> ")
   if [ -z "$pkgs" ]; then
     log "No packages selected."
     return
@@ -237,7 +237,7 @@ function promote_or_copy_package_hierarchy() {
       return
     fi
     local dest
-    dest=$(printf "%s\n" "$parents" | fzf --prompt="Move to parent> ")
+    dest=$(printf "%s\n" "$parents" | fzf_themed --prompt="Move to parent> ")
     if [ -z "$dest" ]; then
       return
     fi
@@ -262,7 +262,7 @@ function promote_or_copy_package_hierarchy() {
     ;;
   "2")
     local dests
-    dests=$(list_available_configs | awk -v src="$source" '$0 != src' | fzf -m --prompt="Copy to configs> " --header="Select destinations (TAB to toggle)")
+    dests=$(list_available_configs | awk -v src="$source" '$0 != src' | fzf_themed -m --prompt="Copy to configs> " --header="Select destinations (TAB to toggle)")
     if [ -z "$dests" ]; then
       return
     fi
@@ -289,7 +289,7 @@ function promote_or_copy_package_hierarchy() {
 function showConfig() {
   rm -f $TMP/install_check
   cd $BASE/configs
-  l=$(ls | fzf)
+  l=$(ls | fzf_themed)
   if [ -z "$l" ]; then
     return
   fi
@@ -315,7 +315,7 @@ function showConfig() {
         fi
       done
     done
-  done | fzf --reverse
+  done | fzf_themed --reverse
 }
 
 function show_file_diff_viewer() {
@@ -325,6 +325,16 @@ function show_file_diff_viewer() {
     difft "$repo" "$target"
   else
     diff -u "$repo" "$target" | less -R
+  fi
+}
+
+function show_file_diff_colored() {
+  local repo="$1"
+  local target="$2"
+  if command -v difft >/dev/null 2>&1; then
+    difft --color=always "$repo" "$target"
+  else
+    diff -u --color=always "$repo" "$target"
   fi
 }
 
@@ -666,7 +676,7 @@ function add_local_file_to_tooltamer() {
   original_dir=$(pwd)
   cd "$HOME" || return
   local selection
-  selection=$(fzf --border-label="Choose file to add" --preview='[ -f {} ] && sed -n "1,200p" "{}"' --height=80%) || {
+  selection=$(fzf_themed --border-label=" Choose file to add " --preview='[ -f {} ] && sed -n "1,200p" "{}"' --height=80%) || {
     log "Abort"
     cd "$original_dir" || true
     return
@@ -696,7 +706,7 @@ function add_local_file_to_tooltamer() {
     config_choices+=("$cfg")
   done < <(list_available_configs)
   local dest_config
-  dest_config=$(printf "%s\n" "${config_choices[@]}" | fzf --prompt="config> " --header="Select destination config for $selection") || {
+  dest_config=$(printf "%s\n" "${config_choices[@]}" | fzf_themed --prompt="config> " --header="Select destination config for $selection") || {
     log "Abort"
     cd "$original_dir" || true
     return
@@ -780,7 +790,7 @@ function select_destination_config() {
     return
   fi
   local selection
-  selection=$(printf "%s\n" "${options[@]}" | fzf --with-nth=2.. --prompt="destination> " --header="Select destination config") || {
+  selection=$(printf "%s\n" "${options[@]}" | fzf_themed --with-nth=2.. --prompt="destination> " --header="Select destination config") || {
     echo ""
     return
   }
@@ -789,70 +799,131 @@ function select_destination_config() {
 
 function reviewManagedFileDiffs() {
   createEffectiveFilesList $TMP/files.lst
+
+  # Create preview script
+  cat >"$TMP/diff_preview.sh" <<'PREVIEW_EOF'
+#!/usr/bin/env bash
+line="$1"
+repo=$(echo "$line" | cut -d'|' -f1)
+target=$(echo "$line" | cut -d'|' -f2)
+if command -v difft >/dev/null 2>&1; then
+  difft --color=always "$repo" "$target" 2>/dev/null
+else
+  diff -u --color=always "$repo" "$target" 2>/dev/null
+fi
+PREVIEW_EOF
+  chmod +x "$TMP/diff_preview.sh"
+
   while true; do
-    local entries=()
-    local lines=()
+    local fzf_lines=()
     local idx=0
     while IFS= read -r entry; do
       [ -z "$entry" ] && continue
       local repo="${entry%%;*}"
       local target="${entry##*;}"
-      if [ -z "$repo" ] || [ -z "$target" ]; then
-        continue
-      fi
-      if [ ! -e "$repo" ] || [ ! -e "$target" ]; then
-        continue
-      fi
-      local repo_hash
-      local target_hash
+      [ -z "$repo" ] || [ -z "$target" ] && continue
+      [ ! -f "$repo" ] || [ ! -f "$target" ] && continue
+
+      local repo_hash target_hash
       repo_hash=$(shasum <"$repo")
       target_hash=$(shasum <"$target")
-      if [ "$repo_hash" = "$target_hash" ]; then
-        continue
-      fi
-      entries[idx]="$repo;$target"
-      local target_disp="${target#$HOME/}"
-      if [ "$target_disp" = "$target" ]; then
-        target_disp="$target"
-      else
-        target_disp="~/$target_disp"
-      fi
-      local repo_disp="${repo##$BASE/configs/}"
-      lines[idx]="${idx}\t${BL}${target_disp}${RESET} ${MG}<->${RESET} ${repo_disp}"
-      ((idx = idx + 1))
-    done < $TMP/files.lst
+      [ "$repo_hash" = "$target_hash" ] && continue
 
-    if [ "${#entries[@]}" -eq 0 ]; then
+      # Size-based status indicator
+      local repo_size target_size indicator
+      repo_size=$(wc -c <"$repo")
+      target_size=$(wc -c <"$target")
+      if [ "$target_size" -gt "$repo_size" ]; then
+        indicator="[+]"
+      elif [ "$target_size" -lt "$repo_size" ]; then
+        indicator="[-]"
+      else
+        indicator="[~]"
+      fi
+
+      local target_disp="${target#$HOME/}"
+      [ "$target_disp" = "$target" ] || target_disp="~/$target_disp"
+      local repo_disp="${repo##$BASE/configs/}"
+
+      fzf_lines+=("${repo}|${target}|${indicator} ${target_disp}  ←→  ${repo_disp}")
+      ((idx = idx + 1))
+    done <$TMP/files.lst
+
+    if [ "${#fzf_lines[@]}" -eq 0 ]; then
       log "${GN}All tracked files are in sync$RESET"
       return
     fi
 
-    local selection
-    selection=$(printf "%b\n" "${lines[@]}" | fzf --ansi --with-nth=2.. --prompt="diff> " --header="Select a file to inspect (ESC to exit)") || return
-    local sel_idx=${selection%%$'\t'*}
-    if [ -z "$sel_idx" ]; then
-      return
-    fi
-    local meta="${entries[$sel_idx]}"
-    local repo="${meta%%;*}"
-    local target="${meta##*;}"
-    show_file_diff_viewer "$repo" "$target"
-    pause_admin
-    local action
-    if ! action=$(menu "Apply change for ${target#$HOME/}?" "Add to ToolTamer" "Revert local change" "Ignore"); then
+    local result
+    result=$(printf "%s\n" "${fzf_lines[@]}" | fzf_themed \
+      --multi \
+      --delimiter='|' --with-nth=3 \
+      --preview="bash $TMP/diff_preview.sh {}" \
+      --preview-label=" Diff Preview " \
+      --preview-window=right:60%:wrap \
+      --border-label=" File Differences " \
+      --expect="ctrl-a,ctrl-r" \
+      --header=$'ENTER=detail view  TAB=multi-select  ctrl-a=add to TT  ctrl-r=revert\n') || return
+
+    local key selected_lines
+    key=$(echo "$result" | head -1)
+    selected_lines=$(echo "$result" | tail -n +2)
+
+    if [ -z "$selected_lines" ]; then
       continue
     fi
-    case "${action%%:*}" in
-    "1")
-      cp "$target" "$repo"
-      log "${GN}Copied$RESET $target -> $repo"
+
+    case "$key" in
+    ctrl-a)
+      # Add to ToolTamer: copy local → repo
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        local repo target
+        repo=$(echo "$line" | cut -d'|' -f1)
+        target=$(echo "$line" | cut -d'|' -f2)
+        cp "$target" "$repo"
+        log "${GN}Copied$RESET $target -> $repo"
+      done <<<"$selected_lines"
+      pause_admin
       ;;
-    "2")
-      cp "$repo" "$target"
-      log "${YL}Reverted$RESET $target from ToolTamer"
+    ctrl-r)
+      # Revert: copy repo → local
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        local repo target
+        repo=$(echo "$line" | cut -d'|' -f1)
+        target=$(echo "$line" | cut -d'|' -f2)
+        cp "$repo" "$target"
+        log "${YL}Reverted$RESET $target from ToolTamer"
+      done <<<"$selected_lines"
+      pause_admin
       ;;
     *)
-      log "Ignoring change for $target"
+      # ENTER: detail view for single file
+      local line
+      line=$(echo "$selected_lines" | head -1)
+      local repo target
+      repo=$(echo "$line" | cut -d'|' -f1)
+      target=$(echo "$line" | cut -d'|' -f2)
+      show_file_diff_viewer "$repo" "$target"
+      pause_admin
+      local action
+      if ! action=$(menu "Apply change for ${target#$HOME/}?" "Add to ToolTamer" "Revert local change" "Ignore"); then
+        continue
+      fi
+      case "${action%%:*}" in
+      "1")
+        cp "$target" "$repo"
+        log "${GN}Copied$RESET $target -> $repo"
+        ;;
+      "2")
+        cp "$repo" "$target"
+        log "${YL}Reverted$RESET $target from ToolTamer"
+        ;;
+      *)
+        log "Ignoring change for $target"
+        ;;
+      esac
       ;;
     esac
   done
@@ -860,7 +931,7 @@ function reviewManagedFileDiffs() {
 
 function move_files_between_configs() {
   local source
-  source=$(ls -1 "$BASE/configs" | fzf --prompt="source config> " --header="Choose config to move/copy files from")
+  source=$(ls -1 "$BASE/configs" | fzf_themed --prompt="source config> " --header="Choose config to move/copy files from")
   if [ -z "$source" ]; then
     log "Abort"
     pause_admin
@@ -896,7 +967,7 @@ function move_files_between_configs() {
 
   local preview_cmd="bash -c 'line=\"\$1\"; data=\$(printf \"%s\" \"\$line\" | cut -f1); file=\${data##*|}; if [ -f \"\$file\" ]; then sed -n \"1,160p\" \"\$file\"; else echo \"File not found: \$file\"; fi' _ {}"
   local selected_lines=()
-  if ! mapfile -t selected_lines < <(fzf --multi --with-nth=2 --prompt="files> " --header="Select file(s) from ${source}" --preview="$preview_cmd" --height=80% <"$selection_file"); then
+  if ! mapfile -t selected_lines < <(fzf_themed --multi --with-nth=2 --prompt="files> " --header="Select file(s) from ${source}" --preview="$preview_cmd" --height=80% <"$selection_file"); then
     log "No files selected."
     pause_admin
     return
@@ -1046,104 +1117,137 @@ while true; do
     checkSystem
     echo "Checking installed packages using $INSTALLER..."
     getInstalledPackages $TMP/to_install $TMP/installed
-    toInstall=""
-    toRemove=""
-    touch $TMP/missing
-    touch $TMP/exceed
-    cat $TMP/to_install | while read l; do
-      if ! grep $l $TMP/installed >/dev/null; then
+    : >$TMP/missing
+    : >$TMP/exceed
+
+    # Bug-Fix: use grep -Fxq for exact package name matches
+    while IFS= read -r l; do
+      [ -z "$l" ] && continue
+      if ! grep -Fxq "$l" $TMP/installed; then
         echo "$l" >>$TMP/missing
       fi
-    done
-    toInstall=$(sort -u $TMP/missing)
-    cat $TMP/installed | while read l; do
-      if ! grep $l $TMP/to_install >/dev/null; then
-        toRemove="$toRemove $l"
+    done <$TMP/to_install
+    sort -u $TMP/missing -o $TMP/missing
+
+    while IFS= read -r l; do
+      [ -z "$l" ] && continue
+      if ! grep -Fxq "$l" $TMP/to_install; then
         echo "$l" >>$TMP/exceed
       fi
-    done
-    toRemove=$(sort -u $TMP/exceed)
-    if [ -z "$toInstall" ] && [ -z "$toRemove" ]; then
-      log "${GN}All in sync$RESET no differences found"
+    done <$TMP/installed
+    sort -u $TMP/exceed -o $TMP/exceed
+
+    if [ ! -s "$TMP/missing" ] && [ ! -s "$TMP/exceed" ]; then
+      log "${GN}All in sync$RESET — no differences found"
+      pause_admin
     else
-      log "Differences in installation:"
-      if [ ! -z "$toInstall" ]; then
-        log "Packages that should be installed:\n$toInstall"
+      # Build categorised fzf list
+      local pkg_lines=()
+      while IFS= read -r pkg; do
+        [ -z "$pkg" ] && continue
+        pkg_lines+=("MISSING|${pkg}|  ✗  MISSING   ${pkg}")
+      done <$TMP/missing
+      while IFS= read -r pkg; do
+        [ -z "$pkg" ] && continue
+        pkg_lines+=("EXCESS|${pkg}|  ⊕  EXCESS    ${pkg}")
+      done <$TMP/exceed
+
+      # Package info preview command
+      local preview_cmd
+      if [ "$INSTALLER" = "brew" ]; then
+        preview_cmd='bash -c "pkg=\$(echo {} | cut -d\"|\" -f2); brew info \"\$pkg\" 2>/dev/null || echo \"No info for \$pkg\""'
+      else
+        preview_cmd='bash -c "pkg=\$(echo {} | cut -d\"|\" -f2); apt-cache show \"\$pkg\" 2>/dev/null || echo \"No info for \$pkg\""'
       fi
-      if [ ! -z "$toRemove" ]; then
-        log "Packages that will be removed:\n$toRemove"
-      fi
+
+      while true; do
+        local result
+        result=$(printf "%s\n" "${pkg_lines[@]}" | fzf_themed \
+          --multi \
+          --delimiter='|' --with-nth=3 \
+          --preview="$preview_cmd" \
+          --preview-label=" Package Info " \
+          --preview-window=right:50%:wrap \
+          --border-label=" Package Differences " \
+          --expect="ctrl-i,ctrl-r,ctrl-t" \
+          --header=$'ctrl-i=install missing  ctrl-r=remove excess  ctrl-t=add excess to TT\nTAB=multi-select  ESC=back\n') || break
+
+        local key selected
+        key=$(echo "$result" | head -1)
+        selected=$(echo "$result" | tail -n +2)
+        [ -z "$selected" ] && continue
+
+        case "$key" in
+        ctrl-i)
+          # Install: only MISSING packages
+          local to_act=""
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local cat pkg
+            cat=$(echo "$line" | cut -d'|' -f1)
+            pkg=$(echo "$line" | cut -d'|' -f2)
+            if [ "$cat" = "MISSING" ]; then
+              to_act="$to_act $pkg"
+            else
+              log "${YL}Skipping$RESET $pkg (not a missing package)"
+            fi
+          done <<<"$selected"
+          to_act=$(echo "$to_act" | xargs)
+          if [ -n "$to_act" ]; then
+            log "${GN}Installing$RESET: $to_act"
+            $INSTALL $to_act
+          fi
+          break
+          ;;
+        ctrl-r)
+          # Remove: only EXCESS packages
+          local to_act=""
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local cat pkg
+            cat=$(echo "$line" | cut -d'|' -f1)
+            pkg=$(echo "$line" | cut -d'|' -f2)
+            if [ "$cat" = "EXCESS" ]; then
+              to_act="$to_act $pkg"
+            else
+              log "${YL}Skipping$RESET $pkg (not an excess package)"
+            fi
+          done <<<"$selected"
+          to_act=$(echo "$to_act" | xargs)
+          if [ -n "$to_act" ]; then
+            log "${YL}Removing$RESET: $to_act"
+            $UNINSTALL $to_act
+          fi
+          break
+          ;;
+        ctrl-t)
+          # Add to ToolTamer: only EXCESS packages
+          local added=0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local cat pkg
+            cat=$(echo "$line" | cut -d'|' -f1)
+            pkg=$(echo "$line" | cut -d'|' -f2)
+            if [ "$cat" = "EXCESS" ]; then
+              echo "$pkg" >>$BASE/configs/$HOST/to_install.$INSTALLER
+              log "${GN}Added$RESET $pkg to ToolTamer"
+              ((added = added + 1))
+            else
+              log "${YL}Skipping$RESET $pkg (not an excess package)"
+            fi
+          done <<<"$selected"
+          log "${GN}$added package(s) added to ToolTamer$RESET"
+          break
+          ;;
+        *)
+          # ENTER without key — show info and loop back
+          continue
+          ;;
+        esac
+      done
+      log "\n${GN}done.$RESET"
+      pause_admin
     fi
-    while true; do
-      o=$(menu "Do you want to install missing packages?" "Yes" "No")
-      n=${o%%:*}
-      o=${o##*:}
-
-      case "$n" in
-      "1" | "y" | "Yes" | "Y")
-        err "not implemented yet - sorry"
-        break
-        ;;
-      "2" | "n" | "No" | "N")
-        break
-        ;;
-      *)
-        log "Hä?"
-        ;;
-      esac
-    done
-    while true; do
-      o=$(menu "Do you want to remove installed packages?" "Yes" "No")
-      n=${o%%:*}
-      o=${o##*:}
-
-      case "$n" in
-      "1" | "y" | "Yes" | "Y")
-        lst=$(printf "%s\n" "$toRemove" | fzf -m)
-        if [ $? -ne 0 ] || [ -z "$lst" ]; then
-          log "${YL}No packages selected$RESET - skipping removal"
-        else
-          log "${YL}Removing$RESET: $lst"
-          $UNINSTALL $lst
-        fi
-        break
-        ;;
-      "2" | "n" | "No" | "N")
-        break
-        ;;
-      *)
-        log "Hä?"
-        ;;
-      esac
-    done
-    while true; do
-      o=$(menu "Do you want to Add installed packages to ToolTamer?" "Yes" "No")
-      n=${o%%:*}
-      o=${o##*:}
-
-      case "$n" in
-      "1" | "y" | "Yes" | "Y")
-        lst=$(printf "%s\n" "$toRemove" | fzf -m)
-        if [ $? -ne 0 ] || [ -z "$lst" ]; then
-          log "${YL}No packages selected$RESET - not adding anything."
-        else
-          log "${YL}adding$RESET: $lst"
-          for i in $lst; do
-            echo "$i" >>$BASE/configs/$HOST/to_install.$INSTALLER
-          done
-        fi
-        break
-        ;;
-      "2" | "n" | "No" | "N")
-        break
-        ;;
-      *)
-        log "Hä?"
-        ;;
-      esac
-    done
-    log "\n${GN}done.$RESET"
-    pause_admin
     ;;
   "5" | "c" | "C")
     showConfig

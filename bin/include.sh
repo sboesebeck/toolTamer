@@ -47,6 +47,17 @@ function fzf_available() {
   [ "${HAVE_FZF:-0}" -eq 1 ]
 }
 
+function fzf_themed() {
+  fzf \
+    --ansi \
+    --border=rounded \
+    --pointer="▶" \
+    --marker="✓" \
+    --highlight-line \
+    --color="header:blue,border:cyan,pointer:yellow,marker:green" \
+    "$@"
+}
+
 function createEffectiveFilesList() {
   echo >$1
 
@@ -156,12 +167,19 @@ function menu() {
     local numbered=()
     local idx=1
     for opt in "${options[@]}"; do
-      numbered+=("$(printf "%d:%b" "$idx" "$opt")")
+      numbered+=("$(printf "%2d. %b" "$idx" "$opt")")
       ((idx = idx + 1))
     done
     local selection
-    if selection=$(printf "%s\n" "${numbered[@]}" | fzf --ansi --no-sort --no-multi --tac --prompt="> " --header="$(printf '%b' "$prompt")"); then
-      echo "$selection"
+    if selection=$(printf "%s\n" "${numbered[@]}" | fzf_themed \
+        --no-sort --no-multi --tac \
+        --border-label=" $prompt " \
+        --info=hidden \
+        --height="~${#options[@]}" \
+        --prompt="> "); then
+      local num
+      num=$(echo "$selection" | sed 's/^ *//' | cut -d. -f1)
+      echo "${num}:${options[$((num - 1))]}"
       return 0
     fi
     return 1
