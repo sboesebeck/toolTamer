@@ -318,6 +318,159 @@ function showConfig() {
   done | fzf_themed --reverse
 }
 
+function show_package_diff_viewer() {
+  checkSystem
+  echo "Checking installed packages using $INSTALLER..."
+  getInstalledPackages $TMP/to_install $TMP/installed
+  : >$TMP/missing
+  : >$TMP/exceed
+
+  while IFS= read -r l; do
+    [ -z "$l" ] && continue
+    if ! grep -Fxq "$l" $TMP/installed; then
+      echo "$l" >>$TMP/missing
+    fi
+  done <$TMP/to_install
+  sort -u $TMP/missing -o $TMP/missing
+
+  while IFS= read -r l; do
+    [ -z "$l" ] && continue
+    if ! grep -Fxq "$l" $TMP/to_install; then
+      echo "$l" >>$TMP/exceed
+    fi
+  done <$TMP/installed
+  sort -u $TMP/exceed -o $TMP/exceed
+
+  if [ ! -s "$TMP/missing" ] && [ ! -s "$TMP/exceed" ]; then
+    log "${GN}All in sync$RESET — no differences found"
+    return
+  fi
+
+  local pkg_lines=()
+  while IFS= read -r pkg; do
+    [ -z "$pkg" ] && continue
+    pkg_lines+=("MISSING|${pkg}|  ✗  MISSING   ${pkg}")
+  done <$TMP/missing
+  while IFS= read -r pkg; do
+    [ -z "$pkg" ] && continue
+    pkg_lines+=("EXCESS|${pkg}|  ⊕  EXCESS    ${pkg}")
+  done <$TMP/exceed
+
+  local preview_cmd
+  if [ "$INSTALLER" = "brew" ]; then
+    preview_cmd='bash -c "pkg=\$(echo {} | cut -d\"|\" -f2); brew info \"\$pkg\" 2>/dev/null || echo \"No info for \$pkg\""'
+  else
+    preview_cmd='bash -c "pkg=\$(echo {} | cut -d\"|\" -f2); apt-cache show \"\$pkg\" 2>/dev/null || echo \"No info for \$pkg\""'
+  fi
+
+  while true; do
+    local result
+    result=$(printf "%s\n" "${pkg_lines[@]}" | fzf_themed \
+      --multi \
+      --delimiter='|' --with-nth=3 \
+      --preview="$preview_cmd" \
+      --preview-label=" Package Info " \
+      --preview-window=right:50%:wrap \
+      --border-label=" Package Differences " \
+      --expect="f1,f3,f5,f7" \
+      --header=$'F1=install missing  F3=remove excess  F5=add to TT  F7=remove from TT\nTAB=multi-select  ESC=back\n') || break
+
+    local key selected
+    key=$(echo "$result" | head -1)
+    selected=$(echo "$result" | tail -n +2)
+    [ -z "$selected" ] && continue
+
+    case "$key" in
+    f1)
+      local to_act=""
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        local cat pkg
+        cat=$(echo "$line" | cut -d'|' -f1)
+        pkg=$(echo "$line" | cut -d'|' -f2)
+        if [ "$cat" = "MISSING" ]; then
+          to_act="$to_act $pkg"
+        else
+          log "${YL}Skipping$RESET $pkg (not a missing package)"
+        fi
+      done <<<"$selected"
+      to_act=$(echo "$to_act" | xargs)
+      if [ -n "$to_act" ]; then
+        log "${GN}Installing$RESET: $to_act"
+        $INSTALL $to_act
+      fi
+      break
+      ;;
+    f3)
+      local to_act=""
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        local cat pkg
+        cat=$(echo "$line" | cut -d'|' -f1)
+        pkg=$(echo "$line" | cut -d'|' -f2)
+        if [ "$cat" = "EXCESS" ]; then
+          to_act="$to_act $pkg"
+        else
+          log "${YL}Skipping$RESET $pkg (not an excess package)"
+        fi
+      done <<<"$selected"
+      to_act=$(echo "$to_act" | xargs)
+      if [ -n "$to_act" ]; then
+        log "${YL}Removing$RESET: $to_act"
+        $UNINSTALL $to_act
+      fi
+      break
+      ;;
+    f5)
+      local added=0
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        local cat pkg
+        cat=$(echo "$line" | cut -d'|' -f1)
+        pkg=$(echo "$line" | cut -d'|' -f2)
+        if [ "$cat" = "EXCESS" ]; then
+          echo "$pkg" >>$BASE/configs/$HOST/to_install.$INSTALLER
+          log "${GN}Added$RESET $pkg to ToolTamer"
+          ((added = added + 1))
+        else
+          log "${YL}Skipping$RESET $pkg (not an excess package)"
+        fi
+      done <<<"$selected"
+      log "${GN}$added package(s) added to ToolTamer$RESET"
+      break
+      ;;
+    f7)
+      local removed=0
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        local cat pkg
+        cat=$(echo "$line" | cut -d'|' -f1)
+        pkg=$(echo "$line" | cut -d'|' -f2)
+        if [ "$cat" = "MISSING" ]; then
+          for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
+            local cfg="$BASE/configs/$c/to_install.$INSTALLER"
+            [ -f "$cfg" ] || continue
+            if grep -Fxq "$pkg" "$cfg"; then
+              grep -Fxv "$pkg" "$cfg" >"$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+              log "${YL}Removed$RESET $pkg from $c/to_install.$INSTALLER"
+            fi
+          done
+          ((removed = removed + 1))
+        else
+          log "${YL}Skipping$RESET $pkg (not a missing package)"
+        fi
+      done <<<"$selected"
+      log "${GN}$removed package(s) removed from ToolTamer$RESET"
+      break
+      ;;
+    *)
+      continue
+      ;;
+    esac
+  done
+  log "\n${GN}done.$RESET"
+}
+
 function show_file_diff_viewer() {
   local repo="$1"
   local target="$2"
@@ -1114,165 +1267,8 @@ while true; do
     reviewManagedFileDiffs
     ;;
   "4" | "i" | "I")
-    checkSystem
-    echo "Checking installed packages using $INSTALLER..."
-    getInstalledPackages $TMP/to_install $TMP/installed
-    : >$TMP/missing
-    : >$TMP/exceed
-
-    # Bug-Fix: use grep -Fxq for exact package name matches
-    while IFS= read -r l; do
-      [ -z "$l" ] && continue
-      if ! grep -Fxq "$l" $TMP/installed; then
-        echo "$l" >>$TMP/missing
-      fi
-    done <$TMP/to_install
-    sort -u $TMP/missing -o $TMP/missing
-
-    while IFS= read -r l; do
-      [ -z "$l" ] && continue
-      if ! grep -Fxq "$l" $TMP/to_install; then
-        echo "$l" >>$TMP/exceed
-      fi
-    done <$TMP/installed
-    sort -u $TMP/exceed -o $TMP/exceed
-
-    if [ ! -s "$TMP/missing" ] && [ ! -s "$TMP/exceed" ]; then
-      log "${GN}All in sync$RESET — no differences found"
-      pause_admin
-    else
-      # Build categorised fzf list
-      local pkg_lines=()
-      while IFS= read -r pkg; do
-        [ -z "$pkg" ] && continue
-        pkg_lines+=("MISSING|${pkg}|  ✗  MISSING   ${pkg}")
-      done <$TMP/missing
-      while IFS= read -r pkg; do
-        [ -z "$pkg" ] && continue
-        pkg_lines+=("EXCESS|${pkg}|  ⊕  EXCESS    ${pkg}")
-      done <$TMP/exceed
-
-      # Package info preview command
-      local preview_cmd
-      if [ "$INSTALLER" = "brew" ]; then
-        preview_cmd='bash -c "pkg=\$(echo {} | cut -d\"|\" -f2); brew info \"\$pkg\" 2>/dev/null || echo \"No info for \$pkg\""'
-      else
-        preview_cmd='bash -c "pkg=\$(echo {} | cut -d\"|\" -f2); apt-cache show \"\$pkg\" 2>/dev/null || echo \"No info for \$pkg\""'
-      fi
-
-      while true; do
-        local result
-        result=$(printf "%s\n" "${pkg_lines[@]}" | fzf_themed \
-          --multi \
-          --delimiter='|' --with-nth=3 \
-          --preview="$preview_cmd" \
-          --preview-label=" Package Info " \
-          --preview-window=right:50%:wrap \
-          --border-label=" Package Differences " \
-          --expect="f1,f3,f5,f7" \
-          --header=$'F1=install missing  F3=remove excess  F5=add to TT  F7=remove from TT\nTAB=multi-select  ESC=back\n') || break
-
-        local key selected
-        key=$(echo "$result" | head -1)
-        selected=$(echo "$result" | tail -n +2)
-        [ -z "$selected" ] && continue
-
-        case "$key" in
-        f1)
-          # Install: only MISSING packages
-          local to_act=""
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            local cat pkg
-            cat=$(echo "$line" | cut -d'|' -f1)
-            pkg=$(echo "$line" | cut -d'|' -f2)
-            if [ "$cat" = "MISSING" ]; then
-              to_act="$to_act $pkg"
-            else
-              log "${YL}Skipping$RESET $pkg (not a missing package)"
-            fi
-          done <<<"$selected"
-          to_act=$(echo "$to_act" | xargs)
-          if [ -n "$to_act" ]; then
-            log "${GN}Installing$RESET: $to_act"
-            $INSTALL $to_act
-          fi
-          break
-          ;;
-        f3)
-          # Remove: only EXCESS packages
-          local to_act=""
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            local cat pkg
-            cat=$(echo "$line" | cut -d'|' -f1)
-            pkg=$(echo "$line" | cut -d'|' -f2)
-            if [ "$cat" = "EXCESS" ]; then
-              to_act="$to_act $pkg"
-            else
-              log "${YL}Skipping$RESET $pkg (not an excess package)"
-            fi
-          done <<<"$selected"
-          to_act=$(echo "$to_act" | xargs)
-          if [ -n "$to_act" ]; then
-            log "${YL}Removing$RESET: $to_act"
-            $UNINSTALL $to_act
-          fi
-          break
-          ;;
-        f5)
-          # Add to ToolTamer: only EXCESS packages
-          local added=0
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            local cat pkg
-            cat=$(echo "$line" | cut -d'|' -f1)
-            pkg=$(echo "$line" | cut -d'|' -f2)
-            if [ "$cat" = "EXCESS" ]; then
-              echo "$pkg" >>$BASE/configs/$HOST/to_install.$INSTALLER
-              log "${GN}Added$RESET $pkg to ToolTamer"
-              ((added = added + 1))
-            else
-              log "${YL}Skipping$RESET $pkg (not an excess package)"
-            fi
-          done <<<"$selected"
-          log "${GN}$added package(s) added to ToolTamer$RESET"
-          break
-          ;;
-        f7)
-          # Remove from ToolTamer config: only MISSING packages
-          local removed=0
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            local cat pkg
-            cat=$(echo "$line" | cut -d'|' -f1)
-            pkg=$(echo "$line" | cut -d'|' -f2)
-            if [ "$cat" = "MISSING" ]; then
-              for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
-                local cfg="$BASE/configs/$c/to_install.$INSTALLER"
-                [ -f "$cfg" ] || continue
-                if grep -Fxq "$pkg" "$cfg"; then
-                  grep -Fxv "$pkg" "$cfg" >"$cfg.tmp" && mv "$cfg.tmp" "$cfg"
-                  log "${YL}Removed$RESET $pkg from $c/to_install.$INSTALLER"
-                fi
-              done
-              ((removed = removed + 1))
-            else
-              log "${YL}Skipping$RESET $pkg (not a missing package)"
-            fi
-          done <<<"$selected"
-          log "${GN}$removed package(s) removed from ToolTamer$RESET"
-          break
-          ;;
-        *)
-          # ENTER without key — show info and loop back
-          continue
-          ;;
-        esac
-      done
-      log "\n${GN}done.$RESET"
-      pause_admin
-    fi
+    show_package_diff_viewer
+    pause_admin
     ;;
   "5" | "c" | "C")
     showConfig
