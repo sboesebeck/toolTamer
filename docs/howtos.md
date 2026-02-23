@@ -60,7 +60,14 @@ Shows a diff for each configured file where the ToolTamer version and the system
 
 `tt --admin` → **"View differences of installed tools"**
 
-Shows packages that would be installed or removed. You can decide for each.
+Shows packages that are missing (in config but not installed) or excess (installed but not in config). Use TAB to multi-select, then:
+
+| Key | Action |
+|-----|--------|
+| **F1** | Install selected missing packages |
+| **F3** | Remove selected excess packages from system |
+| **F5** | Add selected excess packages to ToolTamer config |
+| **F7** | Remove selected missing packages from ToolTamer config |
 
 ## Use ToolTamer without interaction
 
