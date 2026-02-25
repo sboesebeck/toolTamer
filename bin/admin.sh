@@ -989,7 +989,7 @@ function process_single_file() {
       case "${action%%:*}" in
       "1"|"U"|"u")
         cp "$abs" "$repo_file"
-        log "${GN}Updated$RESET $repo_file from system"
+        log "${GN}Updated$RESET ${repo_file##$BASE/configs/} from system"
         break
         ;;
       "2"|"R"|"r")
@@ -1076,18 +1076,18 @@ function process_directory_batch() {
     classification=$(classify_file "$rel")
     case "$classification" in
     identical:*)
-      ((identical_count++))
+      ((identical_count++)) || true
       ;;
     modified:*)
       local repo_file cfg
       repo_file=$(echo "$classification" | cut -d: -f3-)
       cfg=$(echo "$classification" | cut -d: -f2)
       fzf_lines+=("MOD|$f|$repo_file|$cfg|[MOD] $rel ($cfg)")
-      ((mod_count++))
+      ((mod_count++)) || true
       ;;
     new)
       fzf_lines+=("NEW|$f|||[NEW] $rel")
-      ((new_count++))
+      ((new_count++)) || true
       ;;
     esac
   done
