@@ -909,6 +909,344 @@ function add_local_file_to_tooltamer() {
   cd "$original_dir" || true
 }
 
+# Classify a file relative to $HOME against all TT configs.
+# Prints: "identical:<config>" / "modified:<config>:<repo_file>" / "new"
+# Returns 0 if tracked, 1 if new, 2 if system file missing.
+function classify_file() {
+  local rel="$1"
+  local sys_file="$HOME/$rel"
+  [ -f "$sys_file" ] || { echo "missing"; return 2; }
+
+  while IFS= read -r cfg; do
+    [ -z "$cfg" ] && continue
+    local conf_file="$BASE/configs/$cfg/files.conf"
+    [ -f "$conf_file" ] || continue
+    while IFS=';' read -r stored dest; do
+      [ -z "$stored" ] && continue
+      [[ "$stored" =~ ^# ]] && continue
+      dest=$(echo "$dest" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      if [ "$dest" = "$rel" ]; then
+        local repo_file="$BASE/configs/$cfg/files/$stored"
+        if [ -f "$repo_file" ]; then
+          local repo_hash sys_hash
+          repo_hash=$(shasum <"$repo_file")
+          sys_hash=$(shasum <"$sys_file")
+          if [ "$repo_hash" = "$sys_hash" ]; then
+            echo "identical:$cfg"
+          else
+            echo "modified:$cfg:$repo_file"
+          fi
+        else
+          echo "missing_repo:$cfg:$stored"
+        fi
+        return 0
+      fi
+    done <"$conf_file"
+  done < <(ls -1 "$BASE/configs")
+  echo "new"
+  return 1
+}
+
+# Process a single file through the add/check pipeline.
+# $1 = absolute path to file
+function process_single_file() {
+  local abs="$1"
+  if [ ! -f "$abs" ]; then
+    err "File not found: $abs"
+    return 1
+  fi
+
+  # Ensure file is under $HOME
+  case "$abs" in
+    "$HOME"/*) ;;
+    *)
+      err "File $abs is outside \$HOME — not supported by ToolTamer."
+      return 1
+      ;;
+  esac
+
+  local rel="${abs#$HOME/}"
+  local classification
+  classification=$(classify_file "$rel")
+
+  case "$classification" in
+  identical:*)
+    local cfg="${classification#identical:}"
+    log "${GN}✓$RESET $rel is up to date in config ${BL}$cfg$RESET"
+    ;;
+  modified:*)
+    local cfg repo_file
+    cfg=$(echo "$classification" | cut -d: -f2)
+    repo_file=$(echo "$classification" | cut -d: -f3-)
+    log "${YL}Modified$RESET $rel (config ${BL}$cfg$RESET)"
+    local action
+    while true; do
+      action=$(menu "Action for $rel (config: $cfg)" \
+        "${BL}U${RESET}pdate ToolTamer (system → repo)" \
+        "${BL}R${RESET}evert (repo → system)" \
+        "${BL}D${RESET}iff" \
+        "${BL}S${RESET}kip") || return
+      case "${action%%:*}" in
+      "1"|"U"|"u")
+        cp "$abs" "$repo_file"
+        log "${GN}Updated$RESET ${repo_file##$BASE/configs/} from system"
+        break
+        ;;
+      "2"|"R"|"r")
+        cp "$repo_file" "$abs"
+        log "${YL}Reverted$RESET $abs from ToolTamer"
+        break
+        ;;
+      "3"|"D"|"d")
+        show_file_diff_viewer "$repo_file" "$abs"
+        # loop back to menu
+        ;;
+      *)
+        log "Skipped $rel"
+        break
+        ;;
+      esac
+    done
+    ;;
+  new)
+    log "${CN}New file$RESET $rel — not yet tracked"
+    local config_choices=()
+    while IFS= read -r cfg; do
+      [ -z "$cfg" ] && continue
+      config_choices+=("$cfg")
+    done < <(list_available_configs)
+    local dest_config
+    dest_config=$(printf "%s\n" "${config_choices[@]}" | fzf_themed \
+      --prompt="config> " \
+      --border-label=" Select config for $rel ") || {
+      log "Skipped $rel"
+      return
+    }
+    [ -z "$dest_config" ] && { log "Skipped $rel"; return; }
+    add_file_to_config_store "$dest_config" "$abs" "$rel"
+    ;;
+  *)
+    warn "Unexpected classification '$classification' for $rel"
+    ;;
+  esac
+}
+
+# Recursively scan a directory, classify files, and present fzf batch UI.
+# $1 = absolute path to directory
+function process_directory_batch() {
+  local dir="$1"
+  if [ ! -d "$dir" ]; then
+    err "Directory not found: $dir"
+    return 1
+  fi
+
+  case "$dir" in
+    "$HOME"/*) ;;
+    *)
+      err "Directory $dir is outside \$HOME — not supported by ToolTamer."
+      return 1
+      ;;
+  esac
+
+  local dir_rel="${dir#$HOME/}"
+  log "Scanning ${BL}$dir_rel$RESET ..."
+
+  # Collect files, apply excludes
+  local files=()
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    files+=("$f")
+  done < <(find "$dir" -type f \
+    ! -path '*/.git/*' ! -path '*/.svn/*' ! -path '*/.hg/*' \
+    ! -path '*/node_modules/*' ! -path '*/__pycache__/*' ! -path '*/.cache/*' \
+    ! -name '*.swp' ! -name '*.swo' ! -name '*~' ! -name '.DS_Store' \
+    2>/dev/null | sort)
+
+  if [ ${#files[@]} -eq 0 ]; then
+    log "No files found in $dir_rel"
+    return
+  fi
+
+  # Build lookup table: tracked_dest[rel_path] = "config;stored_name"
+  declare -A tracked_dest
+  while IFS= read -r cfg; do
+    [ -z "$cfg" ] && continue
+    local conf_file="$BASE/configs/$cfg/files.conf"
+    [ -f "$conf_file" ] || continue
+    while IFS=';' read -r stored dest; do
+      [ -z "$stored" ] && continue
+      [[ "$stored" =~ ^# ]] && continue
+      # trim whitespace (pure bash, no sed)
+      dest="${dest#"${dest%%[![:space:]]*}"}"
+      dest="${dest%"${dest##*[![:space:]]}"}"
+      [ -z "$dest" ] && continue
+      tracked_dest["$dest"]="$cfg;$stored"
+    done <"$conf_file"
+  done < <(ls -1 "$BASE/configs")
+
+  # Classify each file using lookup table
+  local fzf_lines=()
+  local new_count=0 mod_count=0 identical_count=0
+  local total=${#files[@]}
+  local progress=0
+  for f in "${files[@]}"; do
+    ((progress++)) || true
+    printf "\r  Classifying %d/%d..." "$progress" "$total" >&2
+    local rel="${f#$HOME/}"
+    local entry="${tracked_dest[$rel]:-}"
+    if [ -z "$entry" ]; then
+      fzf_lines+=("NEW|$f|||[NEW] $rel")
+      ((new_count++)) || true
+    else
+      local cfg="${entry%%;*}"
+      local stored="${entry##*;}"
+      local repo_file="$BASE/configs/$cfg/files/$stored"
+      if [ -f "$repo_file" ]; then
+        local repo_hash sys_hash
+        repo_hash=$(shasum <"$repo_file")
+        sys_hash=$(shasum <"$f")
+        if [ "$repo_hash" = "$sys_hash" ]; then
+          ((identical_count++)) || true
+        else
+          fzf_lines+=("MOD|$f|$repo_file|$cfg|[MOD] $rel ($cfg)")
+          ((mod_count++)) || true
+        fi
+      else
+        fzf_lines+=("NEW|$f|||[NEW] $rel")
+        ((new_count++)) || true
+      fi
+    fi
+  done
+  printf "\r%*s\r" 40 "" >&2
+
+  log "Found: ${GN}$identical_count identical$RESET, ${YL}$mod_count modified$RESET, ${CN}$new_count new$RESET"
+
+  if [ ${#fzf_lines[@]} -eq 0 ]; then
+    log "${GN}All files in $dir_rel are up to date$RESET"
+    return
+  fi
+
+  # fzf multi-select
+  local selected
+  selected=$(printf "%s\n" "${fzf_lines[@]}" | fzf_themed \
+    --multi \
+    --delimiter='|' --with-nth=5 \
+    --border-label=" Add files from $dir_rel " \
+    --header=$'TAB=multi-select  ENTER=process selected\n') || return
+
+  [ -z "$selected" ] && return
+
+  # Separate NEW and MOD
+  local new_files=() mod_files=()
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    local type
+    type=$(echo "$line" | cut -d'|' -f1)
+    if [ "$type" = "NEW" ]; then
+      new_files+=("$line")
+    else
+      mod_files+=("$line")
+    fi
+  done <<<"$selected"
+
+  # Process NEW files: single config selection for entire batch
+  if [ ${#new_files[@]} -gt 0 ]; then
+    log "Adding ${CN}${#new_files[@]} new$RESET file(s)..."
+    local config_choices=()
+    while IFS= read -r cfg; do
+      [ -z "$cfg" ] && continue
+      config_choices+=("$cfg")
+    done < <(list_available_configs)
+    local dest_config
+    dest_config=$(printf "%s\n" "${config_choices[@]}" | fzf_themed \
+      --prompt="config> " \
+      --border-label=" Select config for new files ") || {
+      log "Skipping new files"
+      dest_config=""
+    }
+    if [ -n "$dest_config" ]; then
+      for line in "${new_files[@]}"; do
+        local abs
+        abs=$(echo "$line" | cut -d'|' -f2)
+        local rel="${abs#$HOME/}"
+        add_file_to_config_store "$dest_config" "$abs" "$rel"
+      done
+    fi
+  fi
+
+  # Process MOD files: action menu
+  if [ ${#mod_files[@]} -gt 0 ]; then
+    log "Processing ${YL}${#mod_files[@]} modified$RESET file(s)..."
+    local action
+    action=$(menu "Action for ${#mod_files[@]} modified file(s)" \
+      "${BL}U${RESET}pdate ToolTamer (system → repo)" \
+      "${BL}R${RESET}evert all (repo → system)" \
+      "${BL}D${RESET}iff each, then decide" \
+      "${BL}S${RESET}kip all") || return
+    case "${action%%:*}" in
+    "1"|"U"|"u")
+      for line in "${mod_files[@]}"; do
+        local abs repo_file
+        abs=$(echo "$line" | cut -d'|' -f2)
+        repo_file=$(echo "$line" | cut -d'|' -f3)
+        cp "$abs" "$repo_file"
+        log "${GN}Updated$RESET ${repo_file##$BASE/configs/}"
+      done
+      ;;
+    "2"|"R"|"r")
+      for line in "${mod_files[@]}"; do
+        local abs repo_file
+        abs=$(echo "$line" | cut -d'|' -f2)
+        repo_file=$(echo "$line" | cut -d'|' -f3)
+        cp "$repo_file" "$abs"
+        log "${YL}Reverted$RESET ${abs#$HOME/}"
+      done
+      ;;
+    "3"|"D"|"d")
+      for line in "${mod_files[@]}"; do
+        local abs
+        abs=$(echo "$line" | cut -d'|' -f2)
+        process_single_file "$abs"
+      done
+      ;;
+    *)
+      log "Skipped all modified files"
+      ;;
+    esac
+  fi
+}
+
+# Entry point for tt --add. Processes each argument as file or directory.
+# Usage: handle_add_command file1 [file2] [dir1] ...
+function handle_add_command() {
+  if [ $# -eq 0 ]; then
+    err "Usage: tt --add FILE|DIR [FILE|DIR ...]"
+    return 1
+  fi
+
+  for arg in "$@"; do
+    # Resolve to absolute path
+    local abs
+    if [[ "$arg" = /* ]]; then
+      abs="$arg"
+    else
+      abs="${TT_ORIGINAL_PWD:-.}/$arg"
+    fi
+    # Resolve symlinks
+    if command -v realpath >/dev/null 2>&1; then
+      abs=$(realpath "$abs" 2>/dev/null) || abs="$abs"
+    fi
+
+    if [ -f "$abs" ]; then
+      process_single_file "$abs"
+    elif [ -d "$abs" ]; then
+      process_directory_batch "$abs"
+    else
+      err "Not found: $arg"
+    fi
+  done
+}
+
 function select_destination_config() {
   local source="$1"
   local parents=()
@@ -1222,6 +1560,9 @@ function move_files_between_configs() {
   fi
   pause_admin
 }
+
+# When sourced with TT_SOURCE_ONLY=1, only define functions — skip admin menu.
+[ "${TT_SOURCE_ONLY:-}" = "1" ] && return 0
 
 TMP=/tmp/tt$$
 if [ ! -e $TMP ]; then

@@ -6,6 +6,7 @@ if [ "q$1" = "q-sh" ]; then
   exit
 fi
 
+TT_ORIGINAL_PWD="$(pwd)"
 trap cleanup EXIT QUIT TERM
 
 GN='\033[0;32m'
@@ -70,6 +71,7 @@ Options
   --syncFilesOnly   Update managed files without touching packages.
   --updateToolTamer Snapshot package list into ToolTamer (installed tools only).
   --updateToolTamerFiles Snapshot package list and managed files into ToolTamer.
+  --add FILE|DIR ... Add files to ToolTamer or check/update already-tracked files.
   --admin           Open the admin helper menu (moving files, deduping packages, etc.).
   -h, --help        Show this help text and exit.
 
@@ -551,7 +553,7 @@ else
   echo "Configuration for $HOST created. But this is only a start - please have a closer look at $BASE/config/$HOST" | lolcat
 fi
 
-if [ -e $BASE/.git ]; then
+if [ -e $BASE/.git ] && [ $# -eq 0 ]; then
   case "$GIT_AUTO_UPDATE" in
   ask)
     while true; do
@@ -622,6 +624,12 @@ if [ $# -gt 0 ]; then
     log "Logs:"
     cat $TMP/log
     exit 0
+    ;;
+  --add)
+    shift
+    TT_SOURCE_ONLY=1 source $BINDIR/admin.sh
+    handle_add_command "$@"
+    exit $?
     ;;
   --admin)
     source $BINDIR/admin.sh
