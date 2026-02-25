@@ -1031,6 +1031,164 @@ function process_single_file() {
   esac
 }
 
+# Recursively scan a directory, classify files, and present fzf batch UI.
+# $1 = absolute path to directory
+function process_directory_batch() {
+  local dir="$1"
+  if [ ! -d "$dir" ]; then
+    err "Directory not found: $dir"
+    return 1
+  fi
+
+  case "$dir" in
+    "$HOME"/*) ;;
+    *)
+      err "Directory $dir is outside \$HOME — not supported by ToolTamer."
+      return 1
+      ;;
+  esac
+
+  local dir_rel="${dir#$HOME/}"
+  log "Scanning ${BL}$dir_rel$RESET ..."
+
+  # Collect files, apply excludes
+  local files=()
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    files+=("$f")
+  done < <(find "$dir" -type f \
+    ! -path '*/.git/*' ! -path '*/.svn/*' ! -path '*/.hg/*' \
+    ! -path '*/node_modules/*' ! -path '*/__pycache__/*' ! -path '*/.cache/*' \
+    ! -name '*.swp' ! -name '*.swo' ! -name '*~' ! -name '.DS_Store' \
+    2>/dev/null | sort)
+
+  if [ ${#files[@]} -eq 0 ]; then
+    log "No files found in $dir_rel"
+    return
+  fi
+
+  # Classify each file
+  local fzf_lines=()
+  local new_count=0 mod_count=0 identical_count=0
+  for f in "${files[@]}"; do
+    local rel="${f#$HOME/}"
+    local classification
+    classification=$(classify_file "$rel")
+    case "$classification" in
+    identical:*)
+      ((identical_count++))
+      ;;
+    modified:*)
+      local repo_file cfg
+      repo_file=$(echo "$classification" | cut -d: -f3-)
+      cfg=$(echo "$classification" | cut -d: -f2)
+      fzf_lines+=("MOD|$f|$repo_file|$cfg|[MOD] $rel ($cfg)")
+      ((mod_count++))
+      ;;
+    new)
+      fzf_lines+=("NEW|$f|||[NEW] $rel")
+      ((new_count++))
+      ;;
+    esac
+  done
+
+  log "Found: ${GN}$identical_count identical$RESET, ${YL}$mod_count modified$RESET, ${CN}$new_count new$RESET"
+
+  if [ ${#fzf_lines[@]} -eq 0 ]; then
+    log "${GN}All files in $dir_rel are up to date$RESET"
+    return
+  fi
+
+  # fzf multi-select
+  local selected
+  selected=$(printf "%s\n" "${fzf_lines[@]}" | fzf_themed \
+    --multi \
+    --delimiter='|' --with-nth=5 \
+    --border-label=" Add files from $dir_rel " \
+    --header=$'TAB=multi-select  ENTER=process selected\n') || return
+
+  [ -z "$selected" ] && return
+
+  # Separate NEW and MOD
+  local new_files=() mod_files=()
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    local type
+    type=$(echo "$line" | cut -d'|' -f1)
+    if [ "$type" = "NEW" ]; then
+      new_files+=("$line")
+    else
+      mod_files+=("$line")
+    fi
+  done <<<"$selected"
+
+  # Process NEW files: single config selection for entire batch
+  if [ ${#new_files[@]} -gt 0 ]; then
+    log "Adding ${CN}${#new_files[@]} new$RESET file(s)..."
+    local config_choices=()
+    while IFS= read -r cfg; do
+      [ -z "$cfg" ] && continue
+      config_choices+=("$cfg")
+    done < <(list_available_configs)
+    local dest_config
+    dest_config=$(printf "%s\n" "${config_choices[@]}" | fzf_themed \
+      --prompt="config> " \
+      --border-label=" Select config for new files ") || {
+      log "Skipping new files"
+      dest_config=""
+    }
+    if [ -n "$dest_config" ]; then
+      for line in "${new_files[@]}"; do
+        local abs
+        abs=$(echo "$line" | cut -d'|' -f2)
+        local rel="${abs#$HOME/}"
+        add_file_to_config_store "$dest_config" "$abs" "$rel"
+      done
+    fi
+  fi
+
+  # Process MOD files: action menu
+  if [ ${#mod_files[@]} -gt 0 ]; then
+    log "Processing ${YL}${#mod_files[@]} modified$RESET file(s)..."
+    local action
+    action=$(menu "Action for ${#mod_files[@]} modified file(s)" \
+      "${BL}U${RESET}pdate ToolTamer (system → repo)" \
+      "${BL}R${RESET}evert all (repo → system)" \
+      "${BL}D${RESET}iff each, then decide" \
+      "${BL}S${RESET}kip all") || return
+    case "${action%%:*}" in
+    "1"|"U"|"u")
+      for line in "${mod_files[@]}"; do
+        local abs repo_file
+        abs=$(echo "$line" | cut -d'|' -f2)
+        repo_file=$(echo "$line" | cut -d'|' -f3)
+        cp "$abs" "$repo_file"
+        log "${GN}Updated$RESET ${repo_file##$BASE/configs/}"
+      done
+      ;;
+    "2"|"R"|"r")
+      for line in "${mod_files[@]}"; do
+        local abs repo_file
+        abs=$(echo "$line" | cut -d'|' -f2)
+        repo_file=$(echo "$line" | cut -d'|' -f3)
+        cp "$repo_file" "$abs"
+        log "${YL}Reverted$RESET ${abs#$HOME/}"
+      done
+      ;;
+    "3"|"D"|"d")
+      for line in "${mod_files[@]}"; do
+        local abs
+        abs=$(echo "$line" | cut -d'|' -f2)
+        process_single_file "$abs"
+      done
+      ;;
+    *)
+      log "Skipped all modified files"
+      ;;
+    esac
+  fi
+}
+
 function select_destination_config() {
   local source="$1"
   local parents=()
