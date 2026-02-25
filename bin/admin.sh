@@ -947,6 +947,90 @@ function classify_file() {
   return 1
 }
 
+# Process a single file through the add/check pipeline.
+# $1 = absolute path to file
+function process_single_file() {
+  local abs="$1"
+  if [ ! -f "$abs" ]; then
+    err "File not found: $abs"
+    return 1
+  fi
+
+  # Ensure file is under $HOME
+  case "$abs" in
+    "$HOME"/*) ;;
+    *)
+      err "File $abs is outside \$HOME — not supported by ToolTamer."
+      return 1
+      ;;
+  esac
+
+  local rel="${abs#$HOME/}"
+  local classification
+  classification=$(classify_file "$rel")
+
+  case "$classification" in
+  identical:*)
+    local cfg="${classification#identical:}"
+    log "${GN}✓$RESET $rel is up to date in config ${BL}$cfg$RESET"
+    ;;
+  modified:*)
+    local cfg repo_file
+    cfg=$(echo "$classification" | cut -d: -f2)
+    repo_file=$(echo "$classification" | cut -d: -f3-)
+    log "${YL}Modified$RESET $rel (config ${BL}$cfg$RESET)"
+    local action
+    while true; do
+      action=$(menu "Action for $rel (config: $cfg)" \
+        "${BL}U${RESET}pdate ToolTamer (system → repo)" \
+        "${BL}R${RESET}evert (repo → system)" \
+        "${BL}D${RESET}iff" \
+        "${BL}S${RESET}kip") || return
+      case "${action%%:*}" in
+      "1"|"U"|"u")
+        cp "$abs" "$repo_file"
+        log "${GN}Updated$RESET $repo_file from system"
+        break
+        ;;
+      "2"|"R"|"r")
+        cp "$repo_file" "$abs"
+        log "${YL}Reverted$RESET $abs from ToolTamer"
+        break
+        ;;
+      "3"|"D"|"d")
+        show_file_diff_viewer "$repo_file" "$abs"
+        # loop back to menu
+        ;;
+      *)
+        log "Skipped $rel"
+        break
+        ;;
+      esac
+    done
+    ;;
+  new)
+    log "${CN}New file$RESET $rel — not yet tracked"
+    local config_choices=()
+    while IFS= read -r cfg; do
+      [ -z "$cfg" ] && continue
+      config_choices+=("$cfg")
+    done < <(list_available_configs)
+    local dest_config
+    dest_config=$(printf "%s\n" "${config_choices[@]}" | fzf_themed \
+      --prompt="config> " \
+      --border-label=" Select config for $rel ") || {
+      log "Skipped $rel"
+      return
+    }
+    [ -z "$dest_config" ] && { log "Skipped $rel"; return; }
+    add_file_to_config_store "$dest_config" "$abs" "$rel"
+    ;;
+  *)
+    warn "Unexpected classification '$classification' for $rel"
+    ;;
+  esac
+}
+
 function select_destination_config() {
   local source="$1"
   local parents=()
