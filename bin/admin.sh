@@ -1534,6 +1534,9 @@ function move_files_between_configs() {
   pause_admin
 }
 
+# When sourced with TT_SOURCE_ONLY=1, only define functions — skip admin menu.
+[ "${TT_SOURCE_ONLY:-}" = "1" ] && return 0
+
 TMP=/tmp/tt$$
 if [ ! -e $TMP ]; then
   mkdir $TMP

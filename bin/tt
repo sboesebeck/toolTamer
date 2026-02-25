@@ -626,7 +626,7 @@ if [ $# -gt 0 ]; then
     ;;
   --add)
     shift
-    source $BINDIR/admin.sh
+    TT_SOURCE_ONLY=1 source $BINDIR/admin.sh
     handle_add_command "$@"
     exit $?
     ;;
