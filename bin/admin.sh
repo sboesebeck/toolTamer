@@ -1189,6 +1189,37 @@ function process_directory_batch() {
   fi
 }
 
+# Entry point for tt --add. Processes each argument as file or directory.
+# Usage: handle_add_command file1 [file2] [dir1] ...
+function handle_add_command() {
+  if [ $# -eq 0 ]; then
+    err "Usage: tt --add FILE|DIR [FILE|DIR ...]"
+    return 1
+  fi
+
+  for arg in "$@"; do
+    # Resolve to absolute path
+    local abs
+    if [[ "$arg" = /* ]]; then
+      abs="$arg"
+    else
+      abs="$(pwd)/$arg"
+    fi
+    # Resolve symlinks
+    if command -v realpath >/dev/null 2>&1; then
+      abs=$(realpath "$abs" 2>/dev/null) || abs="$abs"
+    fi
+
+    if [ -f "$abs" ]; then
+      process_single_file "$abs"
+    elif [ -d "$abs" ]; then
+      process_directory_batch "$abs"
+    else
+      err "Not found: $arg"
+    fi
+  done
+}
+
 function select_destination_config() {
   local source="$1"
   local parents=()
