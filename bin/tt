@@ -552,7 +552,7 @@ else
   echo "Configuration for $HOST created. But this is only a start - please have a closer look at $BASE/config/$HOST" | lolcat
 fi
 
-if [ -e $BASE/.git ]; then
+if [ -e $BASE/.git ] && [ $# -eq 0 ]; then
   case "$GIT_AUTO_UPDATE" in
   ask)
     while true; do
