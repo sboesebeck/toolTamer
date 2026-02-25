@@ -909,6 +909,44 @@ function add_local_file_to_tooltamer() {
   cd "$original_dir" || true
 }
 
+# Classify a file relative to $HOME against all TT configs.
+# Prints: "identical:<config>" / "modified:<config>:<repo_file>" / "new"
+# Returns 0 if tracked, 1 if new, 2 if system file missing.
+function classify_file() {
+  local rel="$1"
+  local sys_file="$HOME/$rel"
+  [ -f "$sys_file" ] || { echo "missing"; return 2; }
+
+  while IFS= read -r cfg; do
+    [ -z "$cfg" ] && continue
+    local conf_file="$BASE/configs/$cfg/files.conf"
+    [ -f "$conf_file" ] || continue
+    while IFS=';' read -r stored dest; do
+      [ -z "$stored" ] && continue
+      [[ "$stored" =~ ^# ]] && continue
+      dest=$(echo "$dest" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      if [ "$dest" = "$rel" ]; then
+        local repo_file="$BASE/configs/$cfg/files/$stored"
+        if [ -f "$repo_file" ]; then
+          local repo_hash sys_hash
+          repo_hash=$(shasum <"$repo_file")
+          sys_hash=$(shasum <"$sys_file")
+          if [ "$repo_hash" = "$sys_hash" ]; then
+            echo "identical:$cfg"
+          else
+            echo "modified:$cfg:$repo_file"
+          fi
+        else
+          echo "missing_repo:$cfg:$stored"
+        fi
+        return 0
+      fi
+    done <"$conf_file"
+  done < <(ls -1 "$BASE/configs")
+  echo "new"
+  return 1
+}
+
 function select_destination_config() {
   local source="$1"
   local parents=()
