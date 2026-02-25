@@ -1067,30 +1067,57 @@ function process_directory_batch() {
     return
   fi
 
-  # Classify each file
+  # Build lookup table: tracked_dest[rel_path] = "config;stored_name"
+  declare -A tracked_dest
+  while IFS= read -r cfg; do
+    [ -z "$cfg" ] && continue
+    local conf_file="$BASE/configs/$cfg/files.conf"
+    [ -f "$conf_file" ] || continue
+    while IFS=';' read -r stored dest; do
+      [ -z "$stored" ] && continue
+      [[ "$stored" =~ ^# ]] && continue
+      # trim whitespace (pure bash, no sed)
+      dest="${dest#"${dest%%[![:space:]]*}"}"
+      dest="${dest%"${dest##*[![:space:]]}"}"
+      [ -z "$dest" ] && continue
+      tracked_dest["$dest"]="$cfg;$stored"
+    done <"$conf_file"
+  done < <(ls -1 "$BASE/configs")
+
+  # Classify each file using lookup table
   local fzf_lines=()
   local new_count=0 mod_count=0 identical_count=0
+  local total=${#files[@]}
+  local progress=0
   for f in "${files[@]}"; do
+    ((progress++)) || true
+    printf "\r  Classifying %d/%d..." "$progress" "$total" >&2
     local rel="${f#$HOME/}"
-    local classification
-    classification=$(classify_file "$rel")
-    case "$classification" in
-    identical:*)
-      ((identical_count++)) || true
-      ;;
-    modified:*)
-      local repo_file cfg
-      repo_file=$(echo "$classification" | cut -d: -f3-)
-      cfg=$(echo "$classification" | cut -d: -f2)
-      fzf_lines+=("MOD|$f|$repo_file|$cfg|[MOD] $rel ($cfg)")
-      ((mod_count++)) || true
-      ;;
-    new)
+    local entry="${tracked_dest[$rel]:-}"
+    if [ -z "$entry" ]; then
       fzf_lines+=("NEW|$f|||[NEW] $rel")
       ((new_count++)) || true
-      ;;
-    esac
+    else
+      local cfg="${entry%%;*}"
+      local stored="${entry##*;}"
+      local repo_file="$BASE/configs/$cfg/files/$stored"
+      if [ -f "$repo_file" ]; then
+        local repo_hash sys_hash
+        repo_hash=$(shasum <"$repo_file")
+        sys_hash=$(shasum <"$f")
+        if [ "$repo_hash" = "$sys_hash" ]; then
+          ((identical_count++)) || true
+        else
+          fzf_lines+=("MOD|$f|$repo_file|$cfg|[MOD] $rel ($cfg)")
+          ((mod_count++)) || true
+        fi
+      else
+        fzf_lines+=("NEW|$f|||[NEW] $rel")
+        ((new_count++)) || true
+      fi
+    fi
   done
+  printf "\r%*s\r" 40 "" >&2
 
   log "Found: ${GN}$identical_count identical$RESET, ${YL}$mod_count modified$RESET, ${CN}$new_count new$RESET"
 
