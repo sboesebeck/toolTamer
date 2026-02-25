@@ -70,6 +70,7 @@ Options
   --syncFilesOnly   Update managed files without touching packages.
   --updateToolTamer Snapshot package list into ToolTamer (installed tools only).
   --updateToolTamerFiles Snapshot package list and managed files into ToolTamer.
+  --add FILE|DIR ... Add files to ToolTamer or check/update already-tracked files.
   --admin           Open the admin helper menu (moving files, deduping packages, etc.).
   -h, --help        Show this help text and exit.
 
@@ -622,6 +623,12 @@ if [ $# -gt 0 ]; then
     log "Logs:"
     cat $TMP/log
     exit 0
+    ;;
+  --add)
+    shift
+    source $BINDIR/admin.sh
+    handle_add_command "$@"
+    exit $?
     ;;
   --admin)
     source $BINDIR/admin.sh
