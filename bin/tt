@@ -6,6 +6,7 @@ if [ "q$1" = "q-sh" ]; then
   exit
 fi
 
+TT_ORIGINAL_PWD="$(pwd)"
 trap cleanup EXIT QUIT TERM
 
 GN='\033[0;32m'

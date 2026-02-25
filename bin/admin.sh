@@ -1203,7 +1203,7 @@ function handle_add_command() {
     if [[ "$arg" = /* ]]; then
       abs="$arg"
     else
-      abs="$(pwd)/$arg"
+      abs="${TT_ORIGINAL_PWD:-.}/$arg"
     fi
     # Resolve symlinks
     if command -v realpath >/dev/null 2>&1; then
