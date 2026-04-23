@@ -103,6 +103,8 @@ class FileScreen(Screen):
             lines.append("[red]Repo file missing[/]")
         elif not sys_file.exists():
             lines.append("[red]System file missing[/]")
+        elif repo_file.is_dir() or sys_file.is_dir():
+            lines.append("[dim]Directory target — no diff available[/]")
         else:
             repo_hash = hashlib.sha1(repo_file.read_bytes()).hexdigest()
             sys_hash = hashlib.sha1(sys_file.read_bytes()).hexdigest()
