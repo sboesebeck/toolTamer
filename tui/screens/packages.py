@@ -70,6 +70,11 @@ class PackageScreen(Screen):
         log.write(Text("  /  Filter packages", style="dim"))
         log.write(Text("  Esc  Back to dashboard", style="dim"))
 
+    def _refresh_packages(self) -> None:
+        """Reload packages preserving the current filter."""
+        current_filter = self.query_one("#pkg-filter", Input).value
+        self._load_packages(filter_text=current_filter)
+
     def _load_packages(self, filter_text: str = "") -> None:
         table = self.query_one("#pkg-table", DataTable)
         table.clear()
@@ -246,7 +251,7 @@ class PackageScreen(Screen):
 
     def _on_dest_picked(self, result: str | None) -> None:
         if result:
-            self._load_packages()
+            self._refresh_packages()
 
     def action_install_package(self) -> None:
         """Install the selected missing package."""
@@ -274,7 +279,7 @@ class PackageScreen(Screen):
         log = self.query_one("#pkg-info", RichLog)
         log.clear()
         log.write(Text(f"Removed {pkg} from {config}", style="green"))
-        self._load_packages()
+        self._refresh_packages()
 
     def action_add_to_config(self) -> None:
         """Add a new package to a config (prompts for name)."""
@@ -286,7 +291,7 @@ class PackageScreen(Screen):
 
     def _on_package_added(self, result: str | None) -> None:
         if result:
-            self._load_packages()
+            self._refresh_packages()
 
     @work(thread=True)
     def _run_pkg_action(self, package: str, action: str) -> None:
@@ -316,7 +321,7 @@ class PackageScreen(Screen):
                 log.write, Text(f"\n{action.title()} failed.", style="bold red")
             )
         # Refresh the table on the main thread
-        self.app.call_from_thread(self._load_packages)
+        self.app.call_from_thread(self._refresh_packages)
 
     def action_focus_search(self) -> None:
         self.query_one("#pkg-filter", Input).focus()
