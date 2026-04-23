@@ -632,7 +632,12 @@ if [ $# -gt 0 ]; then
     exit $?
     ;;
   --admin)
-    source $BINDIR/admin.sh
+    if [ -x "$BINDIR/tt-tui" ] && [ -d "$BINDIR/../.venv" ]; then
+      log "Launching TUI..."
+      exec "$BINDIR/../.venv/bin/python3" "$BINDIR/tt-tui"
+    else
+      source $BINDIR/admin.sh
+    fi
     exit 0
     ;;
   -h | --help)
@@ -686,7 +691,11 @@ while true; do
     pause_before_menu
     ;;
   "4" | "a" | "A")
-    source $BINDIR/admin.sh
+    if [ -x "$BINDIR/tt-tui" ] && [ -d "$BINDIR/../.venv" ]; then
+      "$BINDIR/../.venv/bin/python3" "$BINDIR/tt-tui"
+    else
+      source $BINDIR/admin.sh
+    fi
     ;;
   esac
 
