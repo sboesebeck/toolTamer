@@ -10,6 +10,16 @@ from tui.core.system import SystemInfo
 from tui.widgets.config_tree import ConfigHierarchy
 from tui.widgets.status_bar import StatusBar
 
+# Map menu index to action name
+MENU_ACTIONS = [
+    "sync_system",
+    "sync_files",
+    "snapshot",
+    "packages",
+    "files",
+    "git",
+]
+
 
 class MenuItem(ListItem):
     """A menu item with key, label, and description."""
@@ -71,6 +81,12 @@ class DashboardScreen(Screen):
                 )
         yield Footer()
 
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Handle Enter key on a menu item."""
+        item = event.item
+        if isinstance(item, MenuItem):
+            self.action_menu_action(item.action_name)
+
     def action_menu_action(self, action: str) -> None:
         if action == "packages":
             from tui.screens.packages import PackageScreen
@@ -89,7 +105,6 @@ class DashboardScreen(Screen):
             self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="snapshot"))
         elif action == "git":
             import subprocess
-            # app.suspend() is available in Textual 1.0.0+
             self.app.suspend()
             subprocess.run(["lazygit"], cwd=str(self._tt_config.base))
 

@@ -102,6 +102,11 @@ Screen {
     padding: 1 2;
 }
 
+#pkg-list-pane Input {
+    height: 3;
+    margin: 0 0 1 0;
+}
+
 #pkg-list-pane DataTable {
     height: 1fr;
 }
