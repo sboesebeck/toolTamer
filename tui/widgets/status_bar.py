@@ -89,8 +89,14 @@ class StatusBar(Widget):
             sys_file = home / m.target
             if not m.repo_path.exists() or not sys_file.exists():
                 missing_files += 1
-            elif hashlib.sha1(m.repo_path.read_bytes()).hexdigest() != hashlib.sha1(sys_file.read_bytes()).hexdigest():
-                modified += 1
+            elif sys_file.is_dir() or m.repo_path.is_dir():
+                continue
+            else:
+                try:
+                    if hashlib.sha1(m.repo_path.read_bytes()).hexdigest() != hashlib.sha1(sys_file.read_bytes()).hexdigest():
+                        modified += 1
+                except (OSError, PermissionError):
+                    continue
 
         file_text = f"{total_files} managed"
         if modified:

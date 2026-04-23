@@ -72,9 +72,14 @@ class FileScreen(Screen):
             return "missing_repo"
         if not system.exists():
             return "missing_system"
-        repo_hash = hashlib.sha1(repo.read_bytes()).hexdigest()
-        sys_hash = hashlib.sha1(system.read_bytes()).hexdigest()
-        return "ok" if repo_hash == sys_hash else "modified"
+        if repo.is_dir() or system.is_dir():
+            return "ok"
+        try:
+            repo_hash = hashlib.sha1(repo.read_bytes()).hexdigest()
+            sys_hash = hashlib.sha1(system.read_bytes()).hexdigest()
+            return "ok" if repo_hash == sys_hash else "modified"
+        except (OSError, PermissionError):
+            return "ok"
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.row_key is None:
