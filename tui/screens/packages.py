@@ -320,6 +320,30 @@ class PackageScreen(Screen):
                 log.write, Text(f"Installing {package}...", style="bold yellow")
             )
             success, output = self._system.install_package(package)
+            if not success and self._system.installer == "brew":
+                # Try to find package in all tapped repos
+                self.app.call_from_thread(
+                    log.write,
+                    Text("Direct install failed, searching taps...", style="yellow"),
+                )
+                full_name = self._system.search_package_in_taps(package)
+                if full_name:
+                    self.app.call_from_thread(
+                        log.write,
+                        Text(f"Found: {full_name}, installing...", style="cyan"),
+                    )
+                    success, output = self._system.install_package(full_name)
+                    if success:
+                        # Update config: replace short name with full name
+                        # and save the tap
+                        tap = full_name.rsplit("/", 1)[0] if "/" in full_name else None
+                        if tap:
+                            host = self._system.hostname
+                            self._tt_config.add_tap(host, tap)
+                            self.app.call_from_thread(
+                                log.write,
+                                Text(f"Saved tap {tap} to config", style="cyan"),
+                            )
         else:
             self.app.call_from_thread(
                 log.write, Text(f"Uninstalling {package}...", style="bold yellow")

@@ -99,6 +99,24 @@ class SystemInfo:
             pass
         return None
 
+    def search_package_in_taps(self, package: str) -> str | None:
+        """Search for a package across all tapped repos. Returns full name or None."""
+        if self.installer != "brew":
+            return None
+        try:
+            result = subprocess.run(
+                ["brew", "search", package],
+                capture_output=True, text=True, timeout=15,
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                # Look for tap/name format matching our package name
+                if "/" in line and line.rsplit("/", 1)[-1] == package:
+                    return line
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        return None
+
     def list_current_taps(self) -> list[str]:
         """List currently tapped brew taps."""
         if self.installer != "brew":
