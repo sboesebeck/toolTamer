@@ -47,6 +47,31 @@ class SystemInfo:
             return []
         return []
 
+    def sync_taps(self, taps: list[str]) -> list[str]:
+        """Ensure all given brew taps are tapped. Returns list of newly added taps."""
+        if self.installer != "brew":
+            return []
+        try:
+            result = subprocess.run(
+                ["brew", "tap"], capture_output=True, text=True, timeout=10,
+            )
+            current = set(result.stdout.splitlines())
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return []
+
+        added = []
+        for tap in taps:
+            if tap not in current:
+                try:
+                    subprocess.run(
+                        ["brew", "tap", tap],
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    added.append(tap)
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass
+        return added
+
     def install_package(self, package: str) -> tuple[bool, str]:
         """Install a package. Returns (success, output)."""
         cmds = {

@@ -120,6 +120,17 @@ class TTConfig:
             if line.strip() and not line.strip().startswith("#")
         ]
 
+    def get_effective_taps(self, config: str) -> list[str]:
+        """Get all taps across the include chain, deduplicated."""
+        seen: set[str] = set()
+        result: list[str] = []
+        for cfg in self.resolve_chain(config):
+            for tap in self.get_taps(cfg):
+                if tap not in seen:
+                    seen.add(tap)
+                    result.append(tap)
+        return result
+
     def move_package(self, source: str, dest: str, package: str, installer: str) -> None:
         self._remove_package(source, package, installer)
         self._add_package(dest, package, installer)

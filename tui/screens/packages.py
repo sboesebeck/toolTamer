@@ -299,6 +299,17 @@ class PackageScreen(Screen):
         self.app.call_from_thread(log.clear)
 
         if action == "install":
+            # Sync taps first (brew only)
+            taps = self._tt_config.get_effective_taps(self._system.hostname)
+            if taps:
+                self.app.call_from_thread(
+                    log.write, Text("Syncing brew taps...", style="dim")
+                )
+                added = self._system.sync_taps(taps)
+                for tap in added:
+                    self.app.call_from_thread(
+                        log.write, Text(f"  Tapped {tap}", style="green")
+                    )
             self.app.call_from_thread(
                 log.write, Text(f"Installing {package}...", style="bold yellow")
             )
