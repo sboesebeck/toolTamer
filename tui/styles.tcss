@@ -160,6 +160,11 @@ StatusBar Horizontal {
     padding: 0 1;
 }
 
+#file-list-pane Input {
+    height: 3;
+    margin: 0 0 1 0;
+}
+
 #file-diff-pane {
     width: 1fr;
     border: round $primary;

@@ -131,6 +131,36 @@ class TTConfig:
                     result.append(tap)
         return result
 
+    def add_file_mapping(self, config: str, stored: str, target: str) -> None:
+        """Add a file mapping to a config's files.conf."""
+        conf_file = self.configs_dir / config / "files.conf"
+        if not conf_file.exists():
+            conf_file.write_text("")
+        # Check if already present
+        for s, t in self.get_file_mappings(config):
+            if s == stored and t == target:
+                return
+        with conf_file.open("a") as f:
+            f.write(f"{stored};{target}\n")
+
+    def remove_file_mapping(self, config: str, stored: str, target: str) -> None:
+        """Remove a file mapping from a config's files.conf."""
+        conf_file = self.configs_dir / config / "files.conf"
+        if not conf_file.exists():
+            return
+        lines = conf_file.read_text().splitlines()
+        filtered = []
+        for line in lines:
+            line_stripped = line.strip()
+            if not line_stripped or line_stripped.startswith("#") or ";" not in line_stripped:
+                filtered.append(line)
+                continue
+            s, t = line_stripped.split(";", 1)
+            if s.strip() == stored and t.strip() == target:
+                continue
+            filtered.append(line)
+        conf_file.write_text("\n".join(filtered) + "\n" if filtered else "")
+
     def _remove_tap(self, config: str, tap: str) -> None:
         """Remove a tap from a config's taps file."""
         taps_file = self.configs_dir / config / "taps"
