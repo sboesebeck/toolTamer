@@ -1,36 +1,47 @@
-"""Config hierarchy tree widget."""
+"""Config hierarchy display widget (read-only)."""
 
-from textual.widgets import Tree
+from textual.app import ComposeResult
+from textual.widget import Widget
+from textual.widgets import Label, Static
 
 from tui.core.config import TTConfig
 
 
-class ConfigTree(Tree):
-    """Displays the config include hierarchy."""
+class ConfigHierarchy(Widget):
+    """Displays the config include chain as a static tree diagram."""
 
     def __init__(self, tt_config: TTConfig, host: str, **kwargs):
-        super().__init__("configs", **kwargs)
+        super().__init__(**kwargs)
         self._tt_config = tt_config
         self._host = host
 
-    def on_mount(self) -> None:
-        self.root.expand()
-        self._build_tree()
+    def compose(self) -> ComposeResult:
+        yield Label(
+            "[dim]Include chain for this host:[/]",
+        )
+        yield Static(self._render_tree(), id="hierarchy-text")
 
-    def _build_tree(self) -> None:
-        self.root.remove_children()
+    def _render_tree(self) -> str:
         chain = self._tt_config.resolve_chain(self._host)
-        parent_node = self.root
-        for cfg in chain:
+        lines = []
+        for i, cfg in enumerate(chain):
             pkg_count = len(
                 self._tt_config.get_packages(cfg, "brew")
             ) + len(
                 self._tt_config.get_packages(cfg, "apt")
             )
             file_count = len(self._tt_config.get_file_mappings(cfg))
-            label = f"{cfg}  ({pkg_count} pkg, {file_count} files)"
-            if cfg == chain[-1]:
-                parent_node = parent_node.add_leaf(label)
+            indent = "  " * i
+            connector = "└─ " if i > 0 else ""
+            stats = f"[dim]({pkg_count} pkg, {file_count} files)[/]"
+
+            if cfg == self._host:
+                name = f"[bold green]{cfg}[/] ← [dim]this host[/]"
+            elif cfg == "common":
+                name = f"[cyan]{cfg}[/]"
             else:
-                parent_node = parent_node.add(label)
-                parent_node.expand()
+                name = f"[blue]{cfg}[/]"
+
+            lines.append(f"{indent}{connector}{name}  {stats}")
+
+        return "\n".join(lines)

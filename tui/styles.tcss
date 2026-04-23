@@ -37,9 +37,13 @@ Screen {
     max-height: 12;
 }
 
-#hierarchy-panel Tree {
+#hierarchy-panel Static {
     height: auto;
     max-height: 8;
+}
+
+#hierarchy-panel ConfigHierarchy {
+    height: auto;
 }
 
 #menu-panel {
@@ -55,7 +59,8 @@ Screen {
 
 #menu-panel ListItem {
     padding: 0 2;
-    height: 3;
+    height: auto;
+    max-height: 2;
 }
 
 #menu-panel ListItem:hover {

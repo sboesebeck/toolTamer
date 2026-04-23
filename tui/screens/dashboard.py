@@ -7,7 +7,7 @@ from textual.widgets import Footer, Header, Label, ListItem, ListView
 
 from tui.core.config import TTConfig
 from tui.core.system import SystemInfo
-from tui.widgets.config_tree import ConfigTree
+from tui.widgets.config_tree import ConfigHierarchy
 from tui.widgets.status_bar import StatusBar
 
 
@@ -22,12 +22,11 @@ class MenuItem(ListItem):
         self.action_name = action
 
     def compose(self) -> ComposeResult:
-        with Container():
-            yield Label(
-                f"[bold yellow]{self._key}[/]  "
-                f"{self._label}  "
-                f"[dim]{self._desc}[/]"
-            )
+        yield Label(
+            f"[bold yellow]{self._key}[/]  "
+            f"{self._label}  "
+            f"[dim]{self._desc}[/]"
+        )
 
 
 class DashboardScreen(Screen):
@@ -54,13 +53,12 @@ class DashboardScreen(Screen):
             with Container(id="status-panel"):
                 yield Label("Status", classes="section-title")
                 yield StatusBar(
-                    host=self._system.hostname,
-                    os_type=self._system.os_type,
-                    installer=self._system.installer,
+                    tt_config=self._tt_config,
+                    system=self._system,
                 )
             with Container(id="hierarchy-panel"):
                 yield Label("Config Hierarchy", classes="section-title")
-                yield ConfigTree(self._tt_config, self._system.hostname)
+                yield ConfigHierarchy(self._tt_config, self._system.hostname)
             with Container(id="menu-panel"):
                 yield Label("Actions", classes="section-title")
                 yield ListView(

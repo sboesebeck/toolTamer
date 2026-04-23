@@ -3,7 +3,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from textual.widgets import Header, Footer, ListView, Tree
+from textual.widgets import Header, Footer, ListView
+
+from tui.widgets.config_tree import ConfigHierarchy
 
 from tui.app import ToolTamerApp
 
@@ -37,7 +39,7 @@ async def test_dashboard_has_menu(app: ToolTamerApp):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_has_config_tree(app: ToolTamerApp):
+async def test_dashboard_has_config_hierarchy(app: ToolTamerApp):
     async with app.run_test() as pilot:
-        tree = app.query_one(Tree)
-        assert tree is not None
+        hierarchy = app.query_one(ConfigHierarchy)
+        assert hierarchy is not None
