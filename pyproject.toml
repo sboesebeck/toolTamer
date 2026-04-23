@@ -1,0 +1,18 @@
+[project]
+name = "tooltamer-tui"
+version = "2.0.0"
+description = "ToolTamer - cross-platform config & package sync TUI"
+requires-python = ">=3.12"
+dependencies = [
+    "textual>=1.0.0,<2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.25.0",
+    "textual-dev>=1.0.0",
+]
+
+[project.scripts]
+tt-tui = "tui.app:main"
