@@ -310,8 +310,11 @@ class FileScreen(Screen):
         """Add a new file to TT."""
         self.app.push_screen(
             AddFileScreen(self._tt_config, self._system),
-            callback=self._on_file_changed,
         )
+
+    def on_screen_resume(self) -> None:
+        """Refresh when returning from add/move screens."""
+        self._refresh_files()
 
     def _on_file_changed(self, result: str | None) -> None:
         if result:
@@ -399,25 +402,30 @@ class MoveFileScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class AddFileScreen(ModalScreen[str | None]):
-    """Add a system file to TT management."""
+class AddFileScreen(Screen):
+    """Browse home directory and add a file to TT management."""
 
-    BINDINGS = [("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        ("escape", "go_back", "Back"),
+        ("enter", "select_file", "Select"),
+    ]
 
     DEFAULT_CSS = """
     AddFileScreen {
-        align: center middle;
+        layout: horizontal;
     }
-    #add-file-dialog {
-        width: 60;
-        height: auto;
-        max-height: 80%;
+    #file-browser-pane {
+        width: 2fr;
         border: round $accent;
-        background: $surface;
-        padding: 1 2;
+        padding: 0 1;
     }
-    #add-file-dialog Input {
-        margin: 1 0;
+    #file-browser-pane DirectoryTree {
+        height: 1fr;
+    }
+    #file-config-pane {
+        width: 1fr;
+        border: round $primary;
+        padding: 1 2;
     }
     """
 
@@ -425,13 +433,19 @@ class AddFileScreen(ModalScreen[str | None]):
         super().__init__()
         self._tt_config = tt_config
         self._system = system
+        self._selected_path: Path | None = None
 
     def compose(self) -> ComposeResult:
-        with Container(id="add-file-dialog"):
-            yield Label(Text("Add file to ToolTamer", style="bold"))
-            yield Label(Text("Path relative to ~ (e.g. .config/foo/bar.toml):", style="dim"))
-            yield Input(placeholder="~/.config/...", id="file-path-input")
-            yield Label(Text("Select target config:", style="dim"))
+        from textual.widgets import DirectoryTree
+
+        yield Header()
+        with Container(id="file-browser-pane"):
+            yield Label(Text("Browse ~ to select a file", style="bold"))
+            yield DirectoryTree(str(Path.home()), id="dir-tree")
+        with Container(id="file-config-pane"):
+            yield Label(Text("Select config:", style="bold"))
+            yield Label(Text("", style="dim"), id="selected-file-label")
+            yield Label(Text(""))
             options = []
             host = self._system.hostname
             for cfg in self._tt_config.list_configs():
@@ -442,26 +456,30 @@ class AddFileScreen(ModalScreen[str | None]):
                     tag = " [cyan][common][/]"
                 options.append(Option(f"{cfg}{tag}", id=cfg))
             yield OptionList(*options, id="config-list")
+        yield Footer()
+
+    def on_directory_tree_file_selected(self, event) -> None:
+        """When a file is clicked/selected in the tree."""
+        self._selected_path = Path(event.path)
+        rel = str(self._selected_path).removeprefix(str(Path.home()) + "/")
+        label = self.query_one("#selected-file-label", Label)
+        label.update(Text(f"Selected: ~/{rel}", style="cyan"))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        rel_path = self.query_one("#file-path-input", Input).value.strip()
-        if not rel_path:
+        if self._selected_path is None:
             return
-        # Remove leading ~/ if present
-        rel_path = rel_path.removeprefix("~/").removeprefix("~")
-        sys_file = Path.home() / rel_path
-        if not sys_file.exists():
+        sys_file = self._selected_path
+        if not sys_file.is_file():
             return
 
+        rel_path = str(sys_file).removeprefix(str(Path.home()) + "/")
         dest = str(event.option.id)
-        # Sanitize stored name (replace / with _/)
-        stored = rel_path.replace("/", "_/") if "/" in rel_path else rel_path
+        stored = rel_path
         dest_file = self._tt_config.configs_dir / dest / "files" / stored
         dest_file.parent.mkdir(parents=True, exist_ok=True)
-        if sys_file.is_file():
-            dest_file.write_bytes(sys_file.read_bytes())
+        dest_file.write_bytes(sys_file.read_bytes())
         self._tt_config.add_file_mapping(dest, stored, rel_path)
-        self.dismiss(rel_path)
+        self.app.pop_screen()
 
-    def action_cancel(self) -> None:
-        self.dismiss(None)
+    def action_go_back(self) -> None:
+        self.app.pop_screen()
