@@ -5,29 +5,33 @@ Screen {
 
 /* -- Dashboard -- */
 #dashboard {
-    layout: grid;
-    grid-size: 2 2;
-    grid-gutter: 1;
+    layout: vertical;
     padding: 1 2;
 }
 
+#top-row {
+    layout: horizontal;
+    height: auto;
+    max-height: 50%;
+}
+
 #status-panel {
-    row-span: 1;
+    width: 1fr;
     border: round $accent;
     padding: 1 2;
     height: auto;
-    max-height: 20;
 }
 
 #pkg-details, #file-details {
     color: $text-muted;
     height: auto;
-    max-height: 3;
+    max-height: 2;
+    padding: 0 0 0 9;
 }
 
 #status-panel .label-key {
     color: $text-muted;
-    width: 12;
+    width: 9;
 }
 
 #status-panel .label-value {
@@ -36,16 +40,15 @@ Screen {
 }
 
 #hierarchy-panel {
-    row-span: 1;
+    width: auto;
+    min-width: 40;
     border: round $accent;
     padding: 1 2;
     height: auto;
-    max-height: 12;
 }
 
 #hierarchy-panel Static {
     height: auto;
-    max-height: 8;
 }
 
 #hierarchy-panel ConfigHierarchy {
@@ -53,7 +56,6 @@ Screen {
 }
 
 #menu-panel {
-    column-span: 2;
     border: round $primary;
     padding: 1 2;
     height: auto;

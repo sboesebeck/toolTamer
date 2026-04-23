@@ -89,7 +89,7 @@ class StatusBar(Widget):
                 if len(excess_pkgs) > 10:
                     names += f" +{len(excess_pkgs) - 10} more"
                 pkg_detail_parts.append(f"[yellow]Extra:[/] {names}")
-            pkg_details = "         " + "  |  ".join(pkg_detail_parts) if pkg_detail_parts else ""
+            pkg_details = " | ".join(pkg_detail_parts) if pkg_detail_parts else ""
 
         except Exception:
             pkg_text = f"{total_pkgs} managed"
@@ -140,7 +140,7 @@ class StatusBar(Widget):
             if len(missing_file_names) > 5:
                 names += f" +{len(missing_file_names) - 5} more"
             file_detail_parts.append(f"[red]Missing:[/] {names}")
-        file_details = "         " + "  |  ".join(file_detail_parts) if file_detail_parts else ""
+        file_details = " | ".join(file_detail_parts) if file_detail_parts else ""
 
         self.app.call_from_thread(
             self.query_one("#file-count", Label).update, file_text

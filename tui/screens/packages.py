@@ -38,11 +38,11 @@ class PackageScreen(Screen):
         with Container(id="pkg-screen"):
             with Container(id="pkg-list-pane"):
                 yield Label(
-                    "Packages  [dim]OK=installed  !!=missing  --=unknown[/]",
+                    "Packages  [dim]OK=installed  !!=missing  ++=extra  --=unknown[/]",
                     classes="section-title",
                 )
                 yield Input(
-                    placeholder="Type to filter...",
+                    placeholder="Filter... (text, or: !! missing, OK installed, ++ extra)",
                     id="pkg-filter",
                 )
                 yield DataTable(id="pkg-table")
@@ -81,6 +81,7 @@ class PackageScreen(Screen):
         except Exception:
             pass
 
+        effective_set = set()
         self._all_rows = []
         seen: set[str] = set()
         for cfg in chain:
@@ -89,6 +90,7 @@ class PackageScreen(Screen):
                 if pkg in seen:
                     continue
                 seen.add(pkg)
+                effective_set.add(pkg)
                 if installed:
                     status = "OK" if pkg in installed else "!!"
                 else:
@@ -101,14 +103,40 @@ class PackageScreen(Screen):
                     tag = cfg
                 self._all_rows.append((status, pkg, tag, f"{cfg}:{pkg}"))
 
+        # Add extra packages (installed but not in any config)
+        if installed:
+            extras = sorted(installed - effective_set)
+            for pkg in extras:
+                self._all_rows.append(("++", pkg, "system", f"_extra_:{pkg}"))
+
+        # Determine filter mode
+        ft = filter_text.strip().lower()
+        status_filter = None
+        name_filter = ""
+        if ft == "!!":
+            status_filter = "!!"
+        elif ft == "ok":
+            status_filter = "OK"
+        elif ft == "++":
+            status_filter = "++"
+        elif ft == "--":
+            status_filter = "--"
+        elif ft:
+            name_filter = ft
+
         for status, pkg, tag, key in self._all_rows:
-            if filter_text and filter_text.lower() not in pkg.lower():
+            if status_filter and status != status_filter:
                 continue
+            if name_filter and name_filter not in pkg.lower():
+                continue
+
             st = Text(status)
             if status == "OK":
                 st.stylize("green")
             elif status == "!!":
                 st.stylize("bold red")
+            elif status == "++":
+                st.stylize("yellow")
             else:
                 st.stylize("dim")
 
@@ -117,6 +145,8 @@ class PackageScreen(Screen):
                 cfg_text.stylize("bold green")
             elif tag == "common":
                 cfg_text.stylize("cyan")
+            elif tag == "system":
+                cfg_text.stylize("yellow")
             else:
                 cfg_text.stylize("blue")
 
