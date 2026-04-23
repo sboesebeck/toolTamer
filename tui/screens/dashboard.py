@@ -110,8 +110,8 @@ class DashboardScreen(Screen):
             self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="snapshot"))
         elif action == "git":
             import subprocess
-            self.app.suspend()
-            subprocess.run(["lazygit"], cwd=str(self._tt_config.base))
+            with self.app.suspend():
+                subprocess.run(["lazygit"], cwd=str(self._tt_config.base))
 
     def action_quit(self) -> None:
         self.app.exit()
