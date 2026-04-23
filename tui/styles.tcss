@@ -16,7 +16,13 @@ Screen {
     border: round $accent;
     padding: 1 2;
     height: auto;
-    max-height: 12;
+    max-height: 20;
+}
+
+#pkg-details, #file-details {
+    color: $text-muted;
+    height: auto;
+    max-height: 3;
 }
 
 #status-panel .label-key {
