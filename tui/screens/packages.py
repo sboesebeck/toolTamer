@@ -178,6 +178,12 @@ class PackageScreen(Screen):
 
         self.app.call_from_thread(log.write, Text(package, style="bold"))
         self.app.call_from_thread(log.write, Text(f"Config: {config}", style="cyan"))
+
+        # Show tap if from a third-party tap
+        tap = self._system.get_package_tap(package)
+        if tap:
+            self.app.call_from_thread(log.write, Text(f"Tap: {tap}", style="dim"))
+
         self.app.call_from_thread(log.write, Text(""))
 
         # Show where else this package appears
@@ -327,6 +333,16 @@ class PackageScreen(Screen):
             self.app.call_from_thread(
                 log.write, Text(f"\n{action.title()} successful!", style="bold green")
             )
+            # After install: check if the package needs a tap and save it
+            if action == "install":
+                tap = self._system.get_package_tap(package)
+                if tap:
+                    host = self._system.hostname
+                    if self._tt_config.add_tap(host, tap):
+                        self.app.call_from_thread(
+                            log.write,
+                            Text(f"Saved tap {tap} to config", style="cyan"),
+                        )
         else:
             self.app.call_from_thread(
                 log.write, Text(f"\n{action.title()} failed.", style="bold red")

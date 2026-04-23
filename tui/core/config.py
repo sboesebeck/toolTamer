@@ -131,6 +131,16 @@ class TTConfig:
                     result.append(tap)
         return result
 
+    def add_tap(self, config: str, tap: str) -> bool:
+        """Add a brew tap to a config's taps file. Returns True if added."""
+        taps_file = self.configs_dir / config / "taps"
+        existing = self.get_taps(config)
+        if tap in existing:
+            return False
+        with taps_file.open("a") as f:
+            f.write(f"{tap}\n")
+        return True
+
     def move_package(self, source: str, dest: str, package: str, installer: str) -> None:
         self._remove_package(source, package, installer)
         self._add_package(dest, package, installer)

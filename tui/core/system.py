@@ -72,6 +72,45 @@ class SystemInfo:
                     pass
         return added
 
+    def get_package_tap(self, package: str) -> str | None:
+        """Get the tap a brew package comes from, or None for core."""
+        if self.installer != "brew":
+            return None
+        try:
+            result = subprocess.run(
+                ["brew", "info", "--json=v2", package],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return None
+            import json
+            data = json.loads(result.stdout)
+            # Check formulae
+            for f in data.get("formulae", []):
+                tap = f.get("tap")
+                if tap and tap != "homebrew/core":
+                    return tap
+            # Check casks
+            for c in data.get("casks", []):
+                tap = c.get("tap")
+                if tap and tap != "homebrew/cask":
+                    return tap
+        except Exception:
+            pass
+        return None
+
+    def list_current_taps(self) -> list[str]:
+        """List currently tapped brew taps."""
+        if self.installer != "brew":
+            return []
+        try:
+            result = subprocess.run(
+                ["brew", "tap"], capture_output=True, text=True, timeout=10,
+            )
+            return [l.strip() for l in result.stdout.splitlines() if l.strip()]
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return []
+
     def install_package(self, package: str) -> tuple[bool, str]:
         """Install a package. Returns (success, output)."""
         cmds = {
