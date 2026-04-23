@@ -19,6 +19,10 @@ class PackageScreen(Screen):
         ("escape", "go_back", "Back"),
         ("m", "move_package", "Move"),
         ("c", "copy_package", "Copy"),
+        ("i", "install_package", "Install"),
+        ("x", "uninstall_package", "Uninstall"),
+        ("r", "remove_from_config", "Remove from Config"),
+        ("a", "add_to_config", "Add to Config"),
         ("slash", "focus_search", "Search"),
         ("tab", "switch_pane", "Switch Pane"),
     ]
@@ -57,10 +61,13 @@ class PackageScreen(Screen):
         log.write(Text("Select a package to see details.", style="dim"))
         log.write(Text(""))
         log.write(Text("Keybindings:", style="bold"))
+        log.write(Text("  i  Install missing package", style="dim"))
+        log.write(Text("  x  Uninstall package from system", style="dim"))
         log.write(Text("  m  Move package to another config", style="dim"))
         log.write(Text("  c  Copy package to another config", style="dim"))
+        log.write(Text("  r  Remove package from config", style="dim"))
+        log.write(Text("  a  Add new package to config", style="dim"))
         log.write(Text("  /  Filter packages", style="dim"))
-        log.write(Text("  Tab  Switch pane", style="dim"))
         log.write(Text("  Esc  Back to dashboard", style="dim"))
 
     def _load_packages(self, filter_text: str = "") -> None:
@@ -158,10 +165,21 @@ class PackageScreen(Screen):
         for info_line in info_text.splitlines():
             self.app.call_from_thread(log.write, Text(info_line))
 
+        # Show status-specific hints
+        installed = set()
+        try:
+            installed = set(self._system.list_installed_packages())
+        except Exception:
+            pass
         self.app.call_from_thread(log.write, Text(""))
-        self.app.call_from_thread(
-            log.write, Text("m=move  c=copy  /=filter", style="dim")
-        )
+        if package not in installed:
+            self.app.call_from_thread(
+                log.write, Text("i=install  r=remove from config  m=move  c=copy", style="dim")
+            )
+        else:
+            self.app.call_from_thread(
+                log.write, Text("x=uninstall  r=remove from config  m=move  c=copy", style="dim")
+            )
 
     def action_go_back(self) -> None:
         self.app.pop_screen()
@@ -199,6 +217,76 @@ class PackageScreen(Screen):
     def _on_dest_picked(self, result: str | None) -> None:
         if result:
             self._load_packages()
+
+    def action_install_package(self) -> None:
+        """Install the selected missing package."""
+        result = self._get_selected_key()
+        if not result:
+            return
+        _, pkg = result
+        self._run_pkg_action(pkg, "install")
+
+    def action_uninstall_package(self) -> None:
+        """Uninstall the selected package from the system."""
+        result = self._get_selected_key()
+        if not result:
+            return
+        _, pkg = result
+        self._run_pkg_action(pkg, "uninstall")
+
+    def action_remove_from_config(self) -> None:
+        """Remove the selected package from its config file."""
+        result = self._get_selected_key()
+        if not result:
+            return
+        config, pkg = result
+        self._tt_config._remove_package(config, pkg, self._system.installer)
+        log = self.query_one("#pkg-info", RichLog)
+        log.clear()
+        log.write(Text(f"Removed {pkg} from {config}", style="green"))
+        self._load_packages()
+
+    def action_add_to_config(self) -> None:
+        """Add a new package to a config (prompts for name)."""
+        from tui.screens._add_package import AddPackageScreen
+        self.app.push_screen(
+            AddPackageScreen(self._tt_config, self._system),
+            callback=self._on_package_added,
+        )
+
+    def _on_package_added(self, result: str | None) -> None:
+        if result:
+            self._load_packages()
+
+    @work(thread=True)
+    def _run_pkg_action(self, package: str, action: str) -> None:
+        log = self.query_one("#pkg-info", RichLog)
+        self.app.call_from_thread(log.clear)
+
+        if action == "install":
+            self.app.call_from_thread(
+                log.write, Text(f"Installing {package}...", style="bold yellow")
+            )
+            success, output = self._system.install_package(package)
+        else:
+            self.app.call_from_thread(
+                log.write, Text(f"Uninstalling {package}...", style="bold yellow")
+            )
+            success, output = self._system.uninstall_package(package)
+
+        for line in output.splitlines():
+            self.app.call_from_thread(log.write, Text(line))
+
+        if success:
+            self.app.call_from_thread(
+                log.write, Text(f"\n{action.title()} successful!", style="bold green")
+            )
+        else:
+            self.app.call_from_thread(
+                log.write, Text(f"\n{action.title()} failed.", style="bold red")
+            )
+        # Refresh the table on the main thread
+        self.app.call_from_thread(self._load_packages)
 
     def action_focus_search(self) -> None:
         self.query_one("#pkg-filter", Input).focus()

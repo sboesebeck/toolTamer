@@ -47,6 +47,48 @@ class SystemInfo:
             return []
         return []
 
+    def install_package(self, package: str) -> tuple[bool, str]:
+        """Install a package. Returns (success, output)."""
+        cmds = {
+            "brew": ["brew", "install", package],
+            "apt": ["sudo", "apt", "install", "-y", package],
+            "pacman": ["sudo", "pacman", "-Sy", "--noconfirm", package],
+        }
+        cmd = cmds.get(self.installer)
+        if not cmd:
+            return False, f"Unknown installer: {self.installer}"
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120,
+            )
+            output = result.stdout + result.stderr
+            return result.returncode == 0, output
+        except subprocess.TimeoutExpired:
+            return False, "Installation timed out"
+        except FileNotFoundError:
+            return False, f"{self.installer} not found"
+
+    def uninstall_package(self, package: str) -> tuple[bool, str]:
+        """Uninstall a package. Returns (success, output)."""
+        cmds = {
+            "brew": ["brew", "uninstall", package],
+            "apt": ["sudo", "apt", "purge", "-y", package],
+            "pacman": ["sudo", "pacman", "-R", "--noconfirm", package],
+        }
+        cmd = cmds.get(self.installer)
+        if not cmd:
+            return False, f"Unknown installer: {self.installer}"
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120,
+            )
+            output = result.stdout + result.stderr
+            return result.returncode == 0, output
+        except subprocess.TimeoutExpired:
+            return False, "Uninstall timed out"
+        except FileNotFoundError:
+            return False, f"{self.installer} not found"
+
     def get_package_info(self, package: str) -> str:
         try:
             if self.installer == "brew":
