@@ -36,6 +36,46 @@ else
 fi
 BINDIR=$(pwd)
 
+function ensure_tui_venv() {
+  local REPO_ROOT="$BINDIR/.."
+  local VENV="$REPO_ROOT/.venv"
+  if [ -d "$VENV" ] && [ -x "$VENV/bin/python3" ]; then
+    return 0
+  fi
+  # Find python 3.12+
+  local PY=""
+  for candidate in python3.13 python3.12 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      local ver
+      ver=$("$candidate" -c "import sys; print(sys.version_info[:2])" 2>/dev/null)
+      if [[ "$ver" =~ "(3, 1"[2-9]")" ]] || [[ "$ver" =~ "(3, 2" ]]; then
+        PY="$candidate"
+        break
+      fi
+    fi
+  done
+  if [ -z "$PY" ]; then
+    warn "Python 3.12+ not found — falling back to classic menu"
+    return 1
+  fi
+  log "Setting up TUI environment (one-time)..."
+  "$PY" -m venv "$VENV" || { err "Failed to create venv"; return 1; }
+  "$VENV/bin/pip" install -q -e "$REPO_ROOT[dev]" || { err "Failed to install dependencies"; return 1; }
+  log "${GN}TUI ready!$RESET"
+  return 0
+}
+
+function launch_tui() {
+  local REPO_ROOT="$BINDIR/.."
+  if [ ! -x "$BINDIR/tt-tui" ]; then
+    return 1
+  fi
+  if ensure_tui_venv; then
+    exec "$REPO_ROOT/.venv/bin/python3" "$BINDIR/tt-tui"
+  fi
+  return 1
+}
+
 function cleanup() {
   echo "Cleaning up"
   rm -rf $TMP
@@ -632,12 +672,7 @@ if [ $# -gt 0 ]; then
     exit $?
     ;;
   --admin)
-    if [ -x "$BINDIR/tt-tui" ] && [ -d "$BINDIR/../.venv" ]; then
-      log "Launching TUI..."
-      exec "$BINDIR/../.venv/bin/python3" "$BINDIR/tt-tui"
-    else
-      source $BINDIR/admin.sh
-    fi
+    launch_tui || source $BINDIR/admin.sh
     exit 0
     ;;
   -h | --help)
@@ -691,11 +726,7 @@ while true; do
     pause_before_menu
     ;;
   "4" | "a" | "A")
-    if [ -x "$BINDIR/tt-tui" ] && [ -d "$BINDIR/../.venv" ]; then
-      "$BINDIR/../.venv/bin/python3" "$BINDIR/tt-tui"
-    else
-      source $BINDIR/admin.sh
-    fi
+    launch_tui || source $BINDIR/admin.sh
     ;;
   esac
 
