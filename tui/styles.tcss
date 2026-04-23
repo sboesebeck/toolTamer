@@ -15,6 +15,16 @@ Screen {
     height: auto;
 }
 
+StatusBar {
+    height: auto;
+    layout: vertical;
+}
+
+StatusBar Horizontal {
+    height: auto;
+    max-height: 1;
+}
+
 #pkg-details, #file-details {
     color: $text-muted;
     height: auto;
