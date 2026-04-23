@@ -60,16 +60,15 @@ class DashboardScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Container(id="dashboard"):
-            with Container(id="top-row"):
-                with Container(id="status-panel"):
-                    yield Label("Status", classes="section-title")
-                    yield StatusBar(
-                        tt_config=self._tt_config,
-                        system=self._system,
-                    )
-                with Container(id="hierarchy-panel"):
-                    yield Label("Config Hierarchy", classes="section-title")
-                    yield ConfigHierarchy(self._tt_config, self._system.hostname)
+            with Container(id="status-panel"):
+                yield Label("Status", classes="section-title")
+                yield StatusBar(
+                    tt_config=self._tt_config,
+                    system=self._system,
+                )
+            with Container(id="hierarchy-panel"):
+                yield Label("Config Hierarchy", classes="section-title")
+                yield ConfigHierarchy(self._tt_config, self._system.hostname)
             with Container(id="menu-panel"):
                 yield Label("Actions", classes="section-title")
                 yield ListView(
