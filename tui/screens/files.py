@@ -95,7 +95,7 @@ class FileScreen(Screen):
     def _show_diff(self, config: str, stored: str, target: str) -> None:
         import subprocess
         log = self.query_one("#file-diff", RichLog)
-        self.call_from_thread(log.clear)
+        self.app.call_from_thread(log.clear)
         repo_file = self._tt_config.configs_dir / config / "files" / stored
         sys_file = Path.home() / target
         lines = [f"[bold]~/{target}[/]", f"Config: [cyan]{config}[/]", f"Repo:   {repo_file}", ""]
@@ -128,7 +128,7 @@ class FileScreen(Screen):
                 except (subprocess.TimeoutExpired, FileNotFoundError):
                     lines.append("[dim]diff command not available[/]")
         for line in lines:
-            self.call_from_thread(log.write, line)
+            self.app.call_from_thread(log.write, line)
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

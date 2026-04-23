@@ -85,7 +85,7 @@ class PackageScreen(Screen):
     def _show_package_info(self, config: str, package: str) -> None:
         info_text = self._system.get_package_info(package)
         log = self.query_one("#pkg-info", RichLog)
-        self.call_from_thread(log.clear)
+        self.app.call_from_thread(log.clear)
         lines = [f"[bold]{package}[/]", f"Config: [cyan]{config}[/]", ""]
         chain = self._tt_config.resolve_chain(self._system.hostname)
         also_in = []
@@ -100,7 +100,7 @@ class PackageScreen(Screen):
         lines.append("[dim]--- Package Info ---[/]")
         lines.append(info_text)
         for line in lines:
-            self.call_from_thread(log.write, line)
+            self.app.call_from_thread(log.write, line)
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

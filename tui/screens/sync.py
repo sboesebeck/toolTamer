@@ -66,14 +66,14 @@ class SyncScreen(Screen):
         flag = flag_map.get(self._mode, "--syncSys")
 
         if tt_script is None:
-            self.call_from_thread(
+            self.app.call_from_thread(
                 log.write,
                 "[red]Error:[/] tt script not found. Make sure ~/toolTamer/bin/tt exists.",
             )
-            self.call_from_thread(status.update, "[red]Error[/] — press ESC to return")
+            self.app.call_from_thread(status.update, "[red]Error[/] — press ESC to return")
             return
 
-        self.call_from_thread(log.write, f"[bold]Running:[/] tt {flag}\n")
+        self.app.call_from_thread(log.write, f"[bold]Running:[/] tt {flag}\n")
 
         try:
             proc = subprocess.Popen(
@@ -86,22 +86,22 @@ class SyncScreen(Screen):
             for line in iter(proc.stdout.readline, ""):
                 if not line:
                     break
-                self.call_from_thread(log.write, line.rstrip())
+                self.app.call_from_thread(log.write, line.rstrip())
 
             proc.wait()
             if proc.returncode == 0:
-                self.call_from_thread(status.update, "[green]Complete[/] — press ESC to return")
+                self.app.call_from_thread(status.update, "[green]Complete[/] — press ESC to return")
             else:
-                self.call_from_thread(
+                self.app.call_from_thread(
                     status.update,
                     f"[red]Failed[/] (exit {proc.returncode}) — press ESC to return",
                 )
         except FileNotFoundError:
-            self.call_from_thread(
+            self.app.call_from_thread(
                 log.write,
                 "[red]Error:[/] bash not found.",
             )
-            self.call_from_thread(status.update, "[red]Error[/] — press ESC to return")
+            self.app.call_from_thread(status.update, "[red]Error[/] — press ESC to return")
 
     def action_go_back(self) -> None:
         self.app.pop_screen()
