@@ -131,6 +131,15 @@ class TTConfig:
                     result.append(tap)
         return result
 
+    def _remove_tap(self, config: str, tap: str) -> None:
+        """Remove a tap from a config's taps file."""
+        taps_file = self.configs_dir / config / "taps"
+        if not taps_file.exists():
+            return
+        lines = taps_file.read_text().splitlines()
+        filtered = [l for l in lines if l.strip() != tap]
+        taps_file.write_text("\n".join(filtered) + "\n" if filtered else "")
+
     def add_tap(self, config: str, tap: str) -> bool:
         """Add a brew tap to a config's taps file. Returns True if added."""
         taps_file = self.configs_dir / config / "taps"

@@ -47,6 +47,7 @@ class DashboardScreen(Screen):
         ("f", "menu_action('sync_files')", "Files Only"),
         ("s", "menu_action('snapshot')", "Snapshot"),
         ("p", "menu_action('packages')", "Packages"),
+        ("t", "menu_action('taps')", "Taps"),
         ("d", "menu_action('files')", "Files"),
         ("g", "menu_action('git')", "Git"),
         ("q", "quit", "Quit"),
@@ -76,6 +77,7 @@ class DashboardScreen(Screen):
                     MenuItem("F", "Files Only", "sync config files", "sync_files"),
                     MenuItem("S", "Snapshot", "capture state to ToolTamer", "snapshot"),
                     MenuItem("P", "Package Manager", "move, add, compare packages", "packages"),
+                    MenuItem("T", "Tap Manager", "manage Homebrew taps", "taps"),
                     MenuItem("D", "File Manager", "move, diff config files", "files"),
                     MenuItem("G", "Git", "open lazygit", "git"),
                 )
@@ -91,6 +93,9 @@ class DashboardScreen(Screen):
         if action == "packages":
             from tui.screens.packages import PackageScreen
             self.app.push_screen(PackageScreen(self._tt_config, self._system))
+        elif action == "taps":
+            from tui.screens.taps import TapScreen
+            self.app.push_screen(TapScreen(self._tt_config, self._system))
         elif action == "files":
             from tui.screens.files import FileScreen
             self.app.push_screen(FileScreen(self._tt_config, self._system))
