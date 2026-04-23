@@ -1,0 +1,187 @@
+/* -- Global -- */
+Screen {
+    background: $surface;
+}
+
+/* -- Dashboard -- */
+#dashboard {
+    layout: grid;
+    grid-size: 2 2;
+    grid-gutter: 1;
+    padding: 1 2;
+}
+
+#status-panel {
+    row-span: 1;
+    border: round $accent;
+    padding: 1 2;
+    height: auto;
+    max-height: 12;
+}
+
+#status-panel .label-key {
+    color: $text-muted;
+    width: 12;
+}
+
+#status-panel .label-value {
+    color: $text;
+    text-style: bold;
+}
+
+#hierarchy-panel {
+    row-span: 1;
+    border: round $accent;
+    padding: 1 2;
+    height: auto;
+    max-height: 12;
+}
+
+#hierarchy-panel Tree {
+    height: auto;
+    max-height: 8;
+}
+
+#menu-panel {
+    column-span: 2;
+    border: round $primary;
+    padding: 1 2;
+    height: auto;
+}
+
+#menu-panel ListView {
+    height: auto;
+}
+
+#menu-panel ListItem {
+    padding: 0 2;
+    height: 3;
+}
+
+#menu-panel ListItem:hover {
+    background: $boost;
+}
+
+#menu-panel ListItem.--highlight {
+    background: $accent 20%;
+}
+
+#menu-panel .menu-key {
+    color: $warning;
+    text-style: bold;
+    width: 3;
+}
+
+#menu-panel .menu-label {
+    color: $text;
+}
+
+#menu-panel .menu-desc {
+    color: $text-muted;
+}
+
+/* -- Package Screen -- */
+#pkg-screen {
+    layout: horizontal;
+}
+
+#pkg-list-pane {
+    width: 1fr;
+    border: round $accent;
+    padding: 0 1;
+}
+
+#pkg-info-pane {
+    width: 1fr;
+    border: round $primary;
+    padding: 1 2;
+}
+
+#pkg-list-pane DataTable {
+    height: 1fr;
+}
+
+#pkg-info-pane RichLog {
+    height: 1fr;
+}
+
+.pkg-status-synced {
+    color: $success;
+}
+
+.pkg-status-missing {
+    color: $error;
+}
+
+.pkg-status-excess {
+    color: $warning;
+}
+
+.config-tag-parent {
+    color: $accent;
+}
+
+.config-tag-child {
+    color: $primary;
+}
+
+.config-tag-host {
+    color: $success;
+    text-style: bold;
+}
+
+/* -- File Screen -- */
+#file-screen {
+    layout: horizontal;
+}
+
+#file-list-pane {
+    width: 1fr;
+    border: round $accent;
+    padding: 0 1;
+}
+
+#file-diff-pane {
+    width: 1fr;
+    border: round $primary;
+    padding: 1 2;
+}
+
+#file-list-pane DataTable {
+    height: 1fr;
+}
+
+#file-diff-pane RichLog {
+    height: 1fr;
+}
+
+/* -- Sync Screen -- */
+#sync-screen {
+    layout: vertical;
+    padding: 1 2;
+}
+
+#sync-screen RichLog {
+    height: 1fr;
+    border: round $accent;
+}
+
+#sync-progress {
+    height: 3;
+    dock: bottom;
+    padding: 0 2;
+}
+
+/* -- Shared -- */
+.section-title {
+    text-style: bold;
+    color: $primary;
+    padding: 0 0 1 0;
+}
+
+.help-text {
+    color: $text-muted;
+    dock: bottom;
+    height: 1;
+    padding: 0 1;
+}
