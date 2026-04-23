@@ -53,14 +53,17 @@ class PackageScreen(Screen):
         except Exception:
             pass
 
+        seen: set[str] = set()
         for cfg in chain:
             pkgs = self._tt_config.get_packages(cfg, self._system.installer)
             for pkg in sorted(pkgs):
+                if pkg in seen:
+                    continue
+                seen.add(pkg)
                 if installed:
                     status = "[green]OK[/]" if pkg in installed else "[red]!![/]"
                 else:
                     status = "[dim]--[/]"
-                tag = ""
                 if cfg == host:
                     tag = "[bold green]host[/]"
                 elif cfg == "common":
