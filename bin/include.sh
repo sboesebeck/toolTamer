@@ -121,6 +121,7 @@ function checkSystem() {
     UNINSTALL="brew uninstall"
     LIST="brew list -1"
     USES="brew uses --installed %%"
+    UPDATE="brew update && brew upgrade"
     ;;
   Linux*)
     log "$BL Info: Running on Linux$RESET"
@@ -129,6 +130,7 @@ function checkSystem() {
       INSTALLER="apt"
       INSTALL="sudo apt install -y"
       UNINSTALL="sudo apt purge -y"
+      UPDATE="sudo apt-get update && sudo apt-get upgrade -y"
       if hash apt-rdepends; then
         USES="apt-rdepends -r %% 2>/dev/null | grep Reverse"
       else
@@ -142,6 +144,7 @@ function checkSystem() {
       log "${YL}Attention:${RESET} on linux uninstalling of tools is not supported!"
       INSTALLER="pacman"
       INSTALL="sudo pacman -Sy --noconfirm"
+      UPDATE="sudo pacman -Syu --noconfirm"
       USES='pacman -Qi %% | grep "Required By " | grep -v None |tr " " "\n"| wc -l'
       LIST="pacman -Q | awk '{print \$1}'"
     }

@@ -46,6 +46,7 @@ class DashboardScreen(Screen):
         ("u", "menu_action('sync_system')", "Update System"),
         ("f", "menu_action('sync_files')", "Files Only"),
         ("s", "menu_action('snapshot')", "Snapshot"),
+        ("r", "menu_action('refresh_index')", "Refresh Pkg Index"),
         ("p", "menu_action('packages')", "Packages"),
         ("t", "menu_action('taps')", "Taps"),
         ("d", "menu_action('files')", "Files"),
@@ -76,6 +77,7 @@ class DashboardScreen(Screen):
                     MenuItem("U", "Update System", "packages + files + scripts", "sync_system"),
                     MenuItem("F", "Files Only", "sync config files", "sync_files"),
                     MenuItem("S", "Snapshot", "capture state to ToolTamer", "snapshot"),
+                    MenuItem("R", "Refresh & Upgrade", "update + upgrade all packages", "refresh_index"),
                     MenuItem("P", "Package Manager", "move, add, compare packages", "packages"),
                     MenuItem("T", "Tap Manager", "manage Homebrew taps", "taps"),
                     MenuItem("D", "File Manager", "move, diff config files", "files"),
@@ -112,6 +114,18 @@ class DashboardScreen(Screen):
         elif action == "snapshot":
             from tui.screens.sync import SyncScreen
             self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="snapshot"), callback=lambda _: self._on_sub_screen_closed())
+        elif action == "refresh_index":
+            import subprocess
+            cmds = self._system.update_commands
+            if not cmds:
+                self.notify("No package manager found", severity="error")
+                return
+            with self.app.suspend():
+                for cmd in cmds:
+                    result = subprocess.run(cmd)
+                    if result.returncode != 0:
+                        break
+            self._on_sub_screen_closed()
         elif action == "git":
             import subprocess
             with self.app.suspend():

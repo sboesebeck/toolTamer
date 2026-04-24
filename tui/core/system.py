@@ -23,6 +23,16 @@ class SystemInfo:
             return "pacman"
         return "unknown"
 
+    @property
+    def update_commands(self) -> list[list[str]]:
+        """Return the package manager update+upgrade commands."""
+        cmds = {
+            "brew": [["brew", "update"], ["brew", "upgrade"]],
+            "apt": [["sudo", "apt-get", "update"], ["sudo", "apt-get", "upgrade", "-y"]],
+            "pacman": [["sudo", "pacman", "-Syu", "--noconfirm"]],
+        }
+        return cmds.get(self.installer, [])
+
     def list_installed_packages(self) -> list[str]:
         try:
             if self.installer == "brew":

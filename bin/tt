@@ -303,7 +303,17 @@ function updateTTFromInstallation() {
 
 }
 
+function updatePackageManager() {
+  if [ -n "$UPDATE" ]; then
+    log "Updating package manager index ($INSTALLER)..."
+    $UPDATE || { err "Package manager update failed"; return 1; }
+    log "${GN}Package index updated$RESET"
+  fi
+  return 0
+}
+
 function syncInstall() {
+  updatePackageManager
 
   logn "Preparing list of software for $HOST..."
   for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
