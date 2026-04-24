@@ -39,27 +39,36 @@ BINDIR=$(pwd)
 function ensure_tui_venv() {
   local REPO_ROOT="$BINDIR/.."
   local VENV="$REPO_ROOT/.venv"
-  if [ -d "$VENV" ] && [ -x "$VENV/bin/python3" ]; then
+  # Check venv exists AND textual is importable (not just python3 binary)
+  if [ -d "$VENV" ] && [ -x "$VENV/bin/python3" ] \
+     && "$VENV/bin/python3" -c "import textual" 2>/dev/null; then
     return 0
   fi
   # Find python 3.12+
   local PY=""
-  for candidate in python3.13 python3.12 python3; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-      local ver
-      ver=$("$candidate" -c "import sys; print(sys.version_info[:2])" 2>/dev/null)
-      if [[ "$ver" =~ "(3, 1"[2-9]")" ]] || [[ "$ver" =~ "(3, 2" ]]; then
-        PY="$candidate"
-        break
+  if [ -x "$VENV/bin/python3" ]; then
+    # Reuse existing venv python for reinstall
+    PY="$VENV/bin/python3"
+  else
+    for candidate in python3.13 python3.12 python3; do
+      if command -v "$candidate" >/dev/null 2>&1; then
+        local ver
+        ver=$("$candidate" -c "import sys; print(sys.version_info[:2])" 2>/dev/null)
+        if [[ "$ver" =~ "(3, 1"[2-9]")" ]] || [[ "$ver" =~ "(3, 2" ]]; then
+          PY="$candidate"
+          break
+        fi
       fi
-    fi
-  done
+    done
+  fi
   if [ -z "$PY" ]; then
     warn "Python 3.12+ not found — falling back to classic menu"
     return 1
   fi
-  log "Setting up TUI environment (one-time)..."
-  "$PY" -m venv "$VENV" || { err "Failed to create venv"; return 1; }
+  log "Setting up TUI environment..."
+  if [ ! -d "$VENV" ]; then
+    "$PY" -m venv "$VENV" || { err "Failed to create venv"; return 1; }
+  fi
   "$VENV/bin/pip" install -q -e "$REPO_ROOT[dev]" || { err "Failed to install dependencies"; return 1; }
   log "${GN}TUI ready!$RESET"
   return 0

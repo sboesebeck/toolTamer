@@ -223,7 +223,7 @@ class PackageScreen(Screen):
             )
 
     def action_go_back(self) -> None:
-        self.app.pop_screen()
+        self.dismiss(None)
 
     def _get_selected_key(self) -> tuple[str, str] | None:
         table = self.query_one("#pkg-table", DataTable)
@@ -288,10 +288,14 @@ class PackageScreen(Screen):
         self._refresh_packages()
 
     def action_add_to_config(self) -> None:
-        """Add a new package to a config (prompts for name)."""
+        """Add a package to a config. Pre-fills name when an extra (++) package is selected."""
         from tui.screens._add_package import AddPackageScreen
+        prefill = ""
+        result = self._get_selected_key()
+        if result and result[0] == "_extra_":
+            prefill = result[1]
         self.app.push_screen(
-            AddPackageScreen(self._tt_config, self._system),
+            AddPackageScreen(self._tt_config, self._system, prefill=prefill),
             callback=self._on_package_added,
         )
 

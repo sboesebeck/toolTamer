@@ -55,6 +55,10 @@ class StatusBar(Widget):
     def on_mount(self) -> None:
         self._scan_status()
 
+    def refresh_status(self) -> None:
+        """Re-run the status scan (call after returning from sub-screens)."""
+        self._scan_status()
+
     @work(thread=True)
     def _scan_status(self) -> None:
         host = self._system.hostname

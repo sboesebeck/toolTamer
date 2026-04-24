@@ -223,7 +223,7 @@ class FileScreen(Screen):
         )
 
     def action_go_back(self) -> None:
-        self.app.pop_screen()
+        self.dismiss(None)
 
     def action_apply_to_system(self) -> None:
         """Copy repo file to system."""

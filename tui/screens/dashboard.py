@@ -89,29 +89,34 @@ class DashboardScreen(Screen):
         if isinstance(item, MenuItem):
             self.action_menu_action(item.action_name)
 
+    def _on_sub_screen_closed(self) -> None:
+        """Refresh dashboard status after returning from a sub-screen."""
+        self.query_one(StatusBar).refresh_status()
+
     def action_menu_action(self, action: str) -> None:
         if action == "packages":
             from tui.screens.packages import PackageScreen
-            self.app.push_screen(PackageScreen(self._tt_config, self._system))
+            self.app.push_screen(PackageScreen(self._tt_config, self._system), callback=lambda _: self._on_sub_screen_closed())
         elif action == "taps":
             from tui.screens.taps import TapScreen
-            self.app.push_screen(TapScreen(self._tt_config, self._system))
+            self.app.push_screen(TapScreen(self._tt_config, self._system), callback=lambda _: self._on_sub_screen_closed())
         elif action == "files":
             from tui.screens.files import FileScreen
-            self.app.push_screen(FileScreen(self._tt_config, self._system))
+            self.app.push_screen(FileScreen(self._tt_config, self._system), callback=lambda _: self._on_sub_screen_closed())
         elif action == "sync_system":
             from tui.screens.sync import SyncScreen
-            self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="full"))
+            self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="full"), callback=lambda _: self._on_sub_screen_closed())
         elif action == "sync_files":
             from tui.screens.sync import SyncScreen
-            self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="files"))
+            self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="files"), callback=lambda _: self._on_sub_screen_closed())
         elif action == "snapshot":
             from tui.screens.sync import SyncScreen
-            self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="snapshot"))
+            self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="snapshot"), callback=lambda _: self._on_sub_screen_closed())
         elif action == "git":
             import subprocess
             with self.app.suspend():
                 subprocess.run(["lazygit"], cwd=str(self._tt_config.base))
+            self._on_sub_screen_closed()
 
     def action_quit(self) -> None:
         self.app.exit()

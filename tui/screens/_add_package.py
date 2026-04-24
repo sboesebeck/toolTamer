@@ -32,16 +32,20 @@ class AddPackageScreen(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, tt_config: TTConfig, system: SystemInfo):
+    def __init__(self, tt_config: TTConfig, system: SystemInfo, prefill: str = ""):
         super().__init__()
         self._tt_config = tt_config
         self._system = system
-        self._package_name: str = ""
+        self._prefill = prefill
 
     def compose(self) -> ComposeResult:
         with Container(id="add-pkg-dialog"):
-            yield Label("[bold]Add package to config[/]")
-            yield Input(placeholder="Package name", id="pkg-name-input")
+            if self._prefill:
+                yield Label(f"[bold]Add [cyan]{self._prefill}[/cyan] to config[/]")
+                yield Input(value=self._prefill, id="pkg-name-input", disabled=True)
+            else:
+                yield Label("[bold]Add package to config[/]")
+                yield Input(placeholder="Package name", id="pkg-name-input")
             yield Label("[dim]Select target config:[/]")
             options = []
             host = self._system.hostname
@@ -53,6 +57,10 @@ class AddPackageScreen(ModalScreen[str | None]):
                     tag = " [cyan][common][/]"
                 options.append(Option(f"{cfg}{tag}", id=cfg))
             yield OptionList(*options, id="config-list")
+
+    def on_mount(self) -> None:
+        if self._prefill:
+            self.query_one("#config-list", OptionList).focus()
 
     def on_option_list_option_selected(
         self, event: OptionList.OptionSelected

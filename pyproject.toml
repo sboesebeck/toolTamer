@@ -14,5 +14,8 @@ dev = [
     "textual-dev>=1.0.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["tui*"]
+
 [project.scripts]
 tt-tui = "tui.app:main"

@@ -192,12 +192,16 @@ class TapScreen(Screen):
         return key.split(":", 1)
 
     def action_go_back(self) -> None:
-        self.app.pop_screen()
+        self.dismiss(None)
 
     def action_add_tap(self) -> None:
-        """Add a new tap to a config."""
+        """Add a tap to a config. Pre-fills name when an extra (++) tap is selected."""
+        prefill = ""
+        result = self._get_selected_key()
+        if result and result[0] == "_extra_":
+            prefill = result[1]
         self.app.push_screen(
-            AddTapScreen(self._tt_config, self._system),
+            AddTapScreen(self._tt_config, self._system, prefill=prefill),
             callback=self._on_tap_changed,
         )
 
@@ -351,18 +355,23 @@ class AddTapScreen(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, tt_config: TTConfig, system: SystemInfo):
+    def __init__(self, tt_config: TTConfig, system: SystemInfo, prefill: str = ""):
         super().__init__()
         self._tt_config = tt_config
         self._system = system
+        self._prefill = prefill
 
     def compose(self) -> ComposeResult:
         with Container(id="add-tap-dialog"):
-            yield Label("[bold]Add brew tap[/]")
-            yield Input(
-                placeholder="user/repo (e.g. steipete/tap)",
-                id="tap-name-input",
-            )
+            if self._prefill:
+                yield Label(f"[bold]Add [cyan]{self._prefill}[/cyan] to config[/]")
+                yield Input(value=self._prefill, id="tap-name-input", disabled=True)
+            else:
+                yield Label("[bold]Add brew tap[/]")
+                yield Input(
+                    placeholder="user/repo (e.g. steipete/tap)",
+                    id="tap-name-input",
+                )
             yield Label("[dim]Select target config:[/]")
             options = []
             host = self._system.hostname
@@ -374,6 +383,10 @@ class AddTapScreen(ModalScreen[str | None]):
                     tag = " [cyan][common][/]"
                 options.append(Option(f"{cfg}{tag}", id=cfg))
             yield OptionList(*options, id="config-list")
+
+    def on_mount(self) -> None:
+        if self._prefill:
+            self.query_one("#config-list", OptionList).focus()
 
     def on_option_list_option_selected(
         self, event: OptionList.OptionSelected
