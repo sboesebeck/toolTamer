@@ -11,6 +11,8 @@ class FileMapping:
     target: str
     config: str
     repo_path: Path
+    is_effective: bool = True
+    shadowed_by: str | None = None
 
 
 class TTConfig:
@@ -99,17 +101,33 @@ class TTConfig:
         return mappings
 
     def get_effective_file_mappings(self, config: str) -> list[FileMapping]:
-        by_target: dict[str, FileMapping] = {}
-        for cfg in self.resolve_chain(config):
+        """Return all file mappings across the include chain.
+
+        When the same target is mapped from multiple configs, the deepest
+        in the chain wins (is_effective=True); the others are kept in the
+        result with is_effective=False and shadowed_by set, so callers can
+        surface duplicates instead of silently hiding them.
+        """
+        chain = self.resolve_chain(config)
+        winner_by_target: dict[str, str] = {}
+        for cfg in chain:
+            for _, target in self.get_file_mappings(cfg):
+                winner_by_target[target] = cfg
+
+        result: list[FileMapping] = []
+        for cfg in chain:
             for stored, target in self.get_file_mappings(cfg):
-                repo_path = self.configs_dir / cfg / "files" / stored
-                by_target[target] = FileMapping(
+                winner = winner_by_target[target]
+                is_effective = cfg == winner
+                result.append(FileMapping(
                     stored=stored,
                     target=target,
                     config=cfg,
-                    repo_path=repo_path,
-                )
-        return list(by_target.values())
+                    repo_path=self.configs_dir / cfg / "files" / stored,
+                    is_effective=is_effective,
+                    shadowed_by=None if is_effective else winner,
+                ))
+        return result
 
     def get_taps(self, config: str) -> list[str]:
         taps_file = self.configs_dir / config / "taps"

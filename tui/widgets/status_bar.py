@@ -106,8 +106,12 @@ class StatusBar(Widget):
             self.query_one("#pkg-details", Label).update, pkg_details
         )
 
-        # File scan
-        mappings = self._tt_config.get_effective_file_mappings(host)
+        # File scan — only count the effective (winning) mapping per target,
+        # so duplicates inherited from parent configs aren't double-counted.
+        mappings = [
+            m for m in self._tt_config.get_effective_file_mappings(host)
+            if m.is_effective
+        ]
         total_files = len(mappings)
         modified_files: list[str] = []
         missing_file_names: list[str] = []

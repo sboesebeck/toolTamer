@@ -87,22 +87,33 @@ class FileScreen(Screen):
         host = self._system.hostname
         mappings = self._tt_config.get_effective_file_mappings(host)
         home = Path.home()
-        for m in sorted(mappings, key=lambda x: x.target):
+        # Sort: by target first, effective entries before shadowed ones for that target
+        for m in sorted(mappings, key=lambda x: (x.target, not x.is_effective)):
             if filter_text and filter_text.lower() not in m.target.lower():
                 continue
             sys_file = home / m.target
             status = self._file_status(m.repo_path, sys_file)
 
-            st = Text({"ok": "OK", "modified": "!!", "missing_system": "--", "missing_repo": "??"}.get(status, "??"))
-            if status == "ok":
-                st.stylize("green")
-            elif status == "modified":
-                st.stylize("bold yellow")
+            if not m.is_effective:
+                # Shadowed entry — actual on-disk state is irrelevant; what
+                # matters is that this mapping is overridden.
+                st = Text("<<")
+                st.stylize("dim magenta")
             else:
-                st.stylize("red")
+                st = Text({"ok": "OK", "modified": "!!", "missing_system": "--", "missing_repo": "??"}.get(status, "??"))
+                if status == "ok":
+                    st.stylize("green")
+                elif status == "modified":
+                    st.stylize("bold yellow")
+                else:
+                    st.stylize("red")
 
+            target_text = Text(f"~/{m.target}")
             cfg_text = Text(m.config)
-            if m.config == host:
+            if not m.is_effective:
+                target_text.stylize("dim")
+                cfg_text.stylize("dim strike")
+            elif m.config == host:
                 cfg_text.stylize("bold green")
             elif m.config == "common":
                 cfg_text.stylize("cyan")
@@ -111,7 +122,7 @@ class FileScreen(Screen):
 
             table.add_row(
                 st,
-                Text(f"~/{m.target}"),
+                target_text,
                 cfg_text,
                 key=f"{m.config}:{m.stored}:{m.target}",
             )
@@ -176,14 +187,65 @@ class FileScreen(Screen):
         self.app.call_from_thread(log.write, Text(f"Config: {config}", style="cyan"))
         self.app.call_from_thread(log.write, Text(f"Stored as: {stored}", style="dim"))
 
-        # Show if inherited from parent
-        if config != host:
+        # Identify shadowing relationships for this target
+        all_for_target = [
+            m for m in self._tt_config.get_effective_file_mappings(host)
+            if m.target == target
+        ]
+        winner = next((m for m in all_for_target if m.is_effective), None)
+        is_shadowed = winner is not None and winner.config != config
+
+        if is_shadowed:
+            self.app.call_from_thread(
+                log.write,
+                Text(
+                    f"Shadowed by '{winner.config}' — this mapping is inactive on this host.",
+                    style="bold magenta",
+                ),
+            )
+            self.app.call_from_thread(
+                log.write,
+                Text("(r=remove this duplicate; system file follows the winning config)", style="dim"),
+            )
+        elif config != host and winner is not None:
+            shadows = [m.config for m in all_for_target if m.config != config]
+            if shadows:
+                self.app.call_from_thread(
+                    log.write,
+                    Text(
+                        f"Effective here. Also mapped (and shadowed) in: {', '.join(shadows)}",
+                        style="yellow",
+                    ),
+                )
             self.app.call_from_thread(
                 log.write,
                 Text(f"Inherited from {config} (o=override locally)", style="yellow"),
             )
+        elif config == host and len(all_for_target) > 1:
+            shadows = [m.config for m in all_for_target if m.config != config]
+            self.app.call_from_thread(
+                log.write,
+                Text(
+                    f"Also mapped (and shadowed) in: {', '.join(shadows)}",
+                    style="yellow",
+                ),
+            )
 
         self.app.call_from_thread(log.write, Text(""))
+
+        if is_shadowed:
+            # Skip the diff for shadowed entries — the on-disk file reflects
+            # the winning config's content, which would be misleading here.
+            self.app.call_from_thread(
+                log.write,
+                Text("Diff hidden: system file reflects the winning config.", style="dim"),
+            )
+            self.app.call_from_thread(log.write, Text(""))
+            self.app.call_from_thread(
+                log.write,
+                Text("r=remove this duplicate  m=move", style="dim"),
+            )
+            return
 
         if not repo_file.exists():
             self.app.call_from_thread(log.write, Text("Repo file missing", style="red"))

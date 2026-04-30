@@ -59,6 +59,28 @@ def test_get_effective_file_mappings(tmp_config: Path):
     assert ".zshrc" in targets
 
 
+def test_get_effective_file_mappings_exposes_shadowed_duplicates(tmp_config: Path):
+    """When the same target is mapped from multiple configs in the chain,
+    all entries are returned and the deepest one wins (is_effective=True)."""
+    # Add a duplicate .zshrc mapping to testhost (already mapped in common)
+    host_conf = tmp_config / "configs" / "testhost" / "files.conf"
+    host_conf.write_text(host_conf.read_text() + "host_zshrc;.zshrc\n")
+
+    cfg = TTConfig(tmp_config)
+    zshrc = [m for m in cfg.get_effective_file_mappings("testhost") if m.target == ".zshrc"]
+
+    # Both mappings (from common and testhost) must be present
+    configs = sorted(m.config for m in zshrc)
+    assert configs == ["common", "testhost"]
+
+    # Deepest in chain wins; the other is shadowed
+    winner = next(m for m in zshrc if m.is_effective)
+    shadowed = next(m for m in zshrc if not m.is_effective)
+    assert winner.config == "testhost"
+    assert shadowed.config == "common"
+    assert shadowed.shadowed_by == "testhost"
+
+
 def test_resolve_chain(tmp_config: Path):
     cfg = TTConfig(tmp_config)
     chain = cfg.resolve_chain("testhost")
