@@ -59,6 +59,41 @@ def test_get_effective_file_mappings(tmp_config: Path):
     assert ".zshrc" in targets
 
 
+def test_effective_target_resolves_directory_targets(tmp_config: Path):
+    """When target ends with '/', the file lands at target+basename(stored),
+    matching include.sh's createEffectiveFilesList behavior."""
+    common = tmp_config / "configs" / "common"
+    (common / "files.conf").write_text(
+        "ssh/id_rsa;.ssh/\nssh/id_rsa.pub;.ssh/\nstarship.toml;.config/starship.toml\n"
+    )
+    cfg = TTConfig(tmp_config)
+    mappings = {m.stored: m.effective_target for m in cfg.get_effective_file_mappings("testhost")}
+    assert mappings["ssh/id_rsa"] == ".ssh/id_rsa"
+    assert mappings["ssh/id_rsa.pub"] == ".ssh/id_rsa.pub"
+    # Non-directory target stays unchanged
+    assert mappings["starship.toml"] == ".config/starship.toml"
+
+
+def test_within_config_duplicates_are_marked_shadowed(tmp_config: Path):
+    """Two lines in the same files.conf that resolve to the same effective
+    target (e.g. `wezterm/x.lua;.config/wezterm/` and `.config/wezterm/x.lua;
+    .config/wezterm/x.lua`) — last-write-wins, the other is shadowed."""
+    macosx = tmp_config / "configs" / "macosx"
+    (macosx / "files.conf").write_text(
+        "wezterm/x.lua;.config/wezterm/\n"
+        ".config/wezterm/x.lua;.config/wezterm/x.lua\n"
+    )
+    cfg = TTConfig(tmp_config)
+    rows = [
+        m for m in cfg.get_effective_file_mappings("testhost")
+        if m.effective_target == ".config/wezterm/x.lua"
+    ]
+    effective = [m for m in rows if m.is_effective]
+    assert len(rows) == 2
+    assert len(effective) == 1
+    assert effective[0].stored == ".config/wezterm/x.lua"
+
+
 def test_get_effective_file_mappings_exposes_shadowed_duplicates(tmp_config: Path):
     """When the same target is mapped from multiple configs in the chain,
     all entries are returned and the deepest one wins (is_effective=True)."""

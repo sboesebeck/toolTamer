@@ -117,15 +117,15 @@ class StatusBar(Widget):
         missing_file_names: list[str] = []
         home = Path.home()
         for m in mappings:
-            sys_file = home / m.target
+            sys_file = home / m.effective_target
             if not m.repo_path.exists() or not sys_file.exists():
-                missing_file_names.append(m.target)
+                missing_file_names.append(m.effective_target)
             elif sys_file.is_dir() or m.repo_path.is_dir():
                 continue
             else:
                 try:
                     if hashlib.sha1(m.repo_path.read_bytes()).hexdigest() != hashlib.sha1(sys_file.read_bytes()).hexdigest():
-                        modified_files.append(m.target)
+                        modified_files.append(m.effective_target)
                 except (OSError, PermissionError):
                     continue
 

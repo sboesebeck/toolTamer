@@ -49,11 +49,11 @@ class FileScreen(Screen):
         with Container(id="file-screen"):
             with Container(id="file-list-pane"):
                 yield Label(
-                    "Files  [dim]OK=synced  !!=changed  --=missing[/]",
+                    "Files  [dim]OK=synced  !!=changed  --=missing  <<=shadowed  ===dup-in-config[/]",
                     classes="section-title",
                 )
                 yield Input(
-                    placeholder="Filter files...",
+                    placeholder="Filter (path, config, or status: OK !! -- ?? << ==)",
                     id="file-filter",
                 )
                 yield DataTable(id="file-table")
@@ -87,28 +87,43 @@ class FileScreen(Screen):
         host = self._system.hostname
         mappings = self._tt_config.get_effective_file_mappings(host)
         home = Path.home()
-        # Sort: by target first, effective entries before shadowed ones for that target
-        for m in sorted(mappings, key=lambda x: (x.target, not x.is_effective)):
-            if filter_text and filter_text.lower() not in m.target.lower():
-                continue
-            sys_file = home / m.target
+        filt = filter_text.lower().strip()
+        # Sort: by effective target, effective entries before shadowed ones
+        for m in sorted(mappings, key=lambda x: (x.effective_target, not x.is_effective)):
+            eff_target = m.effective_target
+            sys_file = home / eff_target
             status = self._file_status(m.repo_path, sys_file)
 
+            self_shadow = (not m.is_effective) and m.shadowed_by == m.config
             if not m.is_effective:
-                # Shadowed entry — actual on-disk state is irrelevant; what
-                # matters is that this mapping is overridden.
-                st = Text("<<")
-                st.stylize("dim magenta")
+                status_token = "==" if self_shadow else "<<"
             else:
-                st = Text({"ok": "OK", "modified": "!!", "missing_system": "--", "missing_repo": "??"}.get(status, "??"))
-                if status == "ok":
-                    st.stylize("green")
-                elif status == "modified":
-                    st.stylize("bold yellow")
-                else:
-                    st.stylize("red")
+                status_token = {
+                    "ok": "OK",
+                    "modified": "!!",
+                    "missing_system": "--",
+                    "missing_repo": "??",
+                }.get(status, "??")
 
-            target_text = Text(f"~/{m.target}")
+            # Filter matches status code, path, or config name
+            if filt:
+                searchable = f"{status_token} ~/{eff_target} {m.config}".lower()
+                if filt not in searchable:
+                    continue
+
+            st = Text(status_token)
+            if self_shadow:
+                st.stylize("dim yellow")
+            elif not m.is_effective:
+                st.stylize("dim magenta")
+            elif status == "ok":
+                st.stylize("green")
+            elif status == "modified":
+                st.stylize("bold yellow")
+            else:
+                st.stylize("red")
+
+            target_text = Text(f"~/{eff_target}")
             cfg_text = Text(m.config)
             if not m.is_effective:
                 target_text.stylize("dim")
@@ -180,22 +195,40 @@ class FileScreen(Screen):
         log = self.query_one("#file-diff", RichLog)
         self.app.call_from_thread(log.clear)
         repo_file = self._tt_config.configs_dir / config / "files" / stored
-        sys_file = Path.home() / target
+        from tui.core.config import _resolve_effective_target
+        eff_target = _resolve_effective_target(stored, target)
+        sys_file = Path.home() / eff_target
         host = self._system.hostname
 
-        self.app.call_from_thread(log.write, Text(f"~/{target}", style="bold"))
+        self.app.call_from_thread(log.write, Text(f"~/{eff_target}", style="bold"))
         self.app.call_from_thread(log.write, Text(f"Config: {config}", style="cyan"))
         self.app.call_from_thread(log.write, Text(f"Stored as: {stored}", style="dim"))
 
         # Identify shadowing relationships for this target
         all_for_target = [
             m for m in self._tt_config.get_effective_file_mappings(host)
-            if m.target == target
+            if m.effective_target == eff_target
         ]
         winner = next((m for m in all_for_target if m.is_effective), None)
-        is_shadowed = winner is not None and winner.config != config
+        is_shadowed = (
+            winner is not None
+            and not (winner.config == config and winner.stored == stored)
+        )
+        is_self_shadow = is_shadowed and winner is not None and winner.config == config
 
-        if is_shadowed:
+        if is_self_shadow:
+            self.app.call_from_thread(
+                log.write,
+                Text(
+                    f"Duplicate inside '{config}' — same effective target also listed as '{winner.stored}'.",
+                    style="bold yellow",
+                ),
+            )
+            self.app.call_from_thread(
+                log.write,
+                Text("(r=remove this stale entry; the other line in this config wins)", style="dim"),
+            )
+        elif is_shadowed:
             self.app.call_from_thread(
                 log.write,
                 Text(
@@ -293,8 +326,9 @@ class FileScreen(Screen):
         if not sel:
             return
         config, stored, target = sel
+        from tui.core.config import _resolve_effective_target
         repo_file = self._tt_config.configs_dir / config / "files" / stored
-        sys_file = Path.home() / target
+        sys_file = Path.home() / _resolve_effective_target(stored, target)
         if repo_file.exists() and not repo_file.is_dir():
             sys_file.parent.mkdir(parents=True, exist_ok=True)
             sys_file.write_bytes(repo_file.read_bytes())
@@ -307,8 +341,9 @@ class FileScreen(Screen):
         if not sel:
             return
         config, stored, target = sel
+        from tui.core.config import _resolve_effective_target
         repo_file = self._tt_config.configs_dir / config / "files" / stored
-        sys_file = Path.home() / target
+        sys_file = Path.home() / _resolve_effective_target(stored, target)
         if sys_file.exists() and not sys_file.is_dir():
             repo_file.parent.mkdir(parents=True, exist_ok=True)
             repo_file.write_bytes(sys_file.read_bytes())
@@ -321,10 +356,12 @@ class FileScreen(Screen):
         if not sel:
             return
         config, stored, target = sel
+        from tui.core.config import _resolve_effective_target
+        eff_target = _resolve_effective_target(stored, target)
         self._tt_config.remove_file_mapping(config, stored, target)
         log = self.query_one("#file-diff", RichLog)
         log.clear()
-        log.write(Text(f"Removed ~/{target} from {config}", style="green"))
+        log.write(Text(f"Removed ~/{eff_target} from {config}", style="green"))
         log.write(Text("File remains on system, just no longer managed by TT.", style="dim"))
         self._refresh_files()
 
@@ -361,9 +398,11 @@ class FileScreen(Screen):
         dest_file.write_bytes(src_file.read_bytes())
         # Add mapping to host config
         self._tt_config.add_file_mapping(host, stored, target)
+        from tui.core.config import _resolve_effective_target
+        eff_target = _resolve_effective_target(stored, target)
         log = self.query_one("#file-diff", RichLog)
         log.clear()
-        log.write(Text(f"Copied ~/{target} to {host} config", style="green"))
+        log.write(Text(f"Copied ~/{eff_target} to {host} config", style="green"))
         log.write(Text(f"Was inherited from {config}, now local.", style="dim"))
         log.write(Text("Edit the local copy, then u=update TT.", style="dim"))
         self._refresh_files()

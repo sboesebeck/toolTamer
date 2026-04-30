@@ -1,7 +1,15 @@
 """Read and manipulate ToolTamer configuration hierarchy."""
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+
+def _resolve_effective_target(stored: str, target: str) -> str:
+    """Mirror include.sh's target resolution: when target ends with '/', the
+    final destination is target + basename(stored)."""
+    if target.endswith("/"):
+        return target + PurePosixPath(stored).name
+    return target
 
 
 @dataclass
@@ -13,6 +21,10 @@ class FileMapping:
     repo_path: Path
     is_effective: bool = True
     shadowed_by: str | None = None
+
+    @property
+    def effective_target(self) -> str:
+        return _resolve_effective_target(self.stored, self.target)
 
 
 class TTConfig:
@@ -109,23 +121,28 @@ class TTConfig:
         surface duplicates instead of silently hiding them.
         """
         chain = self.resolve_chain(config)
-        winner_by_target: dict[str, str] = {}
+        # include.sh's createEffectiveFilesList does last-write-wins by
+        # effective target across the full chain, so iterate everything
+        # in chain order and let the last occurrence win — including
+        # duplicates within a single config.
+        winner: dict[str, tuple[str, str]] = {}
         for cfg in chain:
-            for _, target in self.get_file_mappings(cfg):
-                winner_by_target[target] = cfg
+            for stored, target in self.get_file_mappings(cfg):
+                winner[_resolve_effective_target(stored, target)] = (cfg, stored)
 
         result: list[FileMapping] = []
         for cfg in chain:
             for stored, target in self.get_file_mappings(cfg):
-                winner = winner_by_target[target]
-                is_effective = cfg == winner
+                eff = _resolve_effective_target(stored, target)
+                win_cfg, win_stored = winner[eff]
+                is_effective = cfg == win_cfg and stored == win_stored
                 result.append(FileMapping(
                     stored=stored,
                     target=target,
                     config=cfg,
                     repo_path=self.configs_dir / cfg / "files" / stored,
                     is_effective=is_effective,
-                    shadowed_by=None if is_effective else winner,
+                    shadowed_by=None if is_effective else win_cfg,
                 ))
         return result
 
