@@ -336,19 +336,47 @@ class FileScreen(Screen):
             self._show_diff(config, stored, target)
 
     def action_update_tooltamer(self) -> None:
-        """Copy system file to repo."""
+        """Copy system file to repo. On inherited files, ask whether to write
+        to the inherited config (affects all hosts) or create a host-local
+        override."""
         sel = self._get_selected()
         if not sel:
             return
         config, stored, target = sel
         from tui.core.config import _resolve_effective_target
-        repo_file = self._tt_config.configs_dir / config / "files" / stored
         sys_file = Path.home() / _resolve_effective_target(stored, target)
-        if sys_file.exists() and not sys_file.is_dir():
+        if not sys_file.exists() or sys_file.is_dir():
+            return
+        host = self._system.hostname
+        if config != host:
+            self.app.push_screen(
+                CaptureChoiceScreen(config, host, _resolve_effective_target(stored, target)),
+                callback=lambda choice: self._do_capture(config, stored, target, choice),
+            )
+            return
+        self._do_capture(config, stored, target, "parent")
+
+    def _do_capture(self, config: str, stored: str, target: str, choice: str | None) -> None:
+        if choice not in ("parent", "override"):
+            return
+        from tui.core.config import _resolve_effective_target
+        sys_file = Path.home() / _resolve_effective_target(stored, target)
+        if not sys_file.exists() or sys_file.is_dir():
+            return
+        host = self._system.hostname
+        if choice == "override":
+            dest_config = host
+            dest_file = self._tt_config.configs_dir / host / "files" / stored
+            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            dest_file.write_bytes(sys_file.read_bytes())
+            self._tt_config.add_file_mapping(host, stored, target)
+        else:
+            dest_config = config
+            repo_file = self._tt_config.configs_dir / config / "files" / stored
             repo_file.parent.mkdir(parents=True, exist_ok=True)
             repo_file.write_bytes(sys_file.read_bytes())
-            self._refresh_files()
-            self._show_diff(config, stored, target)
+        self._refresh_files()
+        self._show_diff(dest_config, stored, target)
 
     def action_remove_from_tt(self) -> None:
         """Remove file from TT config (stop managing it)."""
@@ -429,6 +457,71 @@ class FileScreen(Screen):
             self.query_one("#file-diff", RichLog).focus()
         else:
             self.query_one("#file-table", DataTable).focus()
+
+
+class CaptureChoiceScreen(ModalScreen[str | None]):
+    """Ask user whether to capture changes to the inherited config or create
+    a local host override."""
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("p", "pick('parent')", "Parent"),
+        ("o", "pick('override')", "Override"),
+    ]
+
+    DEFAULT_CSS = """
+    CaptureChoiceScreen {
+        align: center middle;
+    }
+    #capture-choice-dialog {
+        width: 70;
+        height: auto;
+        max-height: 80%;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, parent_config: str, host: str, eff_target: str):
+        super().__init__()
+        self._parent_config = parent_config
+        self._host = host
+        self._eff_target = eff_target
+
+    def compose(self) -> ComposeResult:
+        with Container(id="capture-choice-dialog"):
+            yield Label(Text.assemble(
+                ("Capture ", "bold"),
+                (f"~/{self._eff_target}", "cyan"),
+                (" — file is inherited from ", ""),
+                (self._parent_config, "yellow"),
+                (".", ""),
+            ))
+            yield Label(Text(""))
+            yield Label(Text("Where should the current system content be saved?", style="bold"))
+            yield Label(Text(""))
+            yield OptionList(
+                Option(
+                    f"Write to '{self._parent_config}' (affects all hosts using it)",
+                    id="parent",
+                ),
+                Option(
+                    f"Create local override in '{self._host}' (only this host)",
+                    id="override",
+                ),
+            )
+            yield Label(Text(""))
+            yield Label(Text("Esc=cancel  p=parent  o=override", style="dim"))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(str(event.option.id))
+
+    def action_pick(self, choice: str) -> None:
+        self.dismiss(choice)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class MoveFileScreen(ModalScreen[str | None]):

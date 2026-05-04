@@ -59,6 +59,11 @@ class DashboardScreen(Screen):
         self._tt_config = tt_config
         self._system = system
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "menu_action" and parameters and parameters[0] == "taps":
+            return self._system.installer == "brew"
+        return True
+
     def compose(self) -> ComposeResult:
         yield Header()
         with Container(id="dashboard"):
@@ -73,16 +78,20 @@ class DashboardScreen(Screen):
                 yield ConfigHierarchy(self._tt_config, self._system.hostname)
             with Container(id="menu-panel"):
                 yield Label("Actions", classes="section-title")
-                yield ListView(
+                items = [
                     MenuItem("U", "Update System", "packages + files + scripts", "sync_system"),
                     MenuItem("F", "Files Only", "sync config files", "sync_files"),
                     MenuItem("S", "Snapshot", "capture state to ToolTamer", "snapshot"),
                     MenuItem("R", "Refresh & Upgrade", "update + upgrade all packages", "refresh_index"),
                     MenuItem("P", "Package Manager", "move, add, compare packages", "packages"),
-                    MenuItem("T", "Tap Manager", "manage Homebrew taps", "taps"),
+                ]
+                if self._system.installer == "brew":
+                    items.append(MenuItem("T", "Tap Manager", "manage Homebrew taps", "taps"))
+                items.extend([
                     MenuItem("D", "File Manager", "move, diff config files", "files"),
                     MenuItem("G", "Git", "open lazygit", "git"),
-                )
+                ])
+                yield ListView(*items)
         yield Footer()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -100,6 +109,9 @@ class DashboardScreen(Screen):
             from tui.screens.packages import PackageScreen
             self.app.push_screen(PackageScreen(self._tt_config, self._system), callback=lambda _: self._on_sub_screen_closed())
         elif action == "taps":
+            if self._system.installer != "brew":
+                self.notify("Tap Manager only available with Homebrew", severity="warning")
+                return
             from tui.screens.taps import TapScreen
             self.app.push_screen(TapScreen(self._tt_config, self._system), callback=lambda _: self._on_sub_screen_closed())
         elif action == "files":
