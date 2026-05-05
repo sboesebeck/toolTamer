@@ -50,6 +50,7 @@ class DashboardScreen(Screen):
         ("p", "menu_action('packages')", "Packages"),
         ("t", "menu_action('taps')", "Taps"),
         ("d", "menu_action('files')", "Files"),
+        ("l", "menu_action('local_install')", "Local Scripts"),
         ("g", "menu_action('git')", "Git"),
         ("q", "quit", "Quit"),
     ]
@@ -89,6 +90,7 @@ class DashboardScreen(Screen):
                     items.append(MenuItem("T", "Tap Manager", "manage Homebrew taps", "taps"))
                 items.extend([
                     MenuItem("D", "File Manager", "move, diff config files", "files"),
+                    MenuItem("L", "Local Scripts", "manage local_install.sh", "local_install"),
                     MenuItem("G", "Git", "open lazygit", "git"),
                 ])
                 yield ListView(*items)
@@ -117,6 +119,9 @@ class DashboardScreen(Screen):
         elif action == "files":
             from tui.screens.files import FileScreen
             self.app.push_screen(FileScreen(self._tt_config, self._system), callback=lambda _: self._on_sub_screen_closed())
+        elif action == "local_install":
+            from tui.screens.local_install import LocalInstallScreen
+            self.app.push_screen(LocalInstallScreen(self._tt_config, self._system), callback=lambda _: self._on_sub_screen_closed())
         elif action == "sync_system":
             from tui.screens.sync import SyncScreen
             self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="full"), callback=lambda _: self._on_sub_screen_closed())

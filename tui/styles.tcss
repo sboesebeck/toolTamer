@@ -179,6 +179,31 @@ StatusBar Horizontal {
     height: 1fr;
 }
 
+/* -- Local Install Screen -- */
+#local-install-screen {
+    layout: horizontal;
+}
+
+#local-install-list-pane {
+    width: 1fr;
+    border: round $accent;
+    padding: 0 1;
+}
+
+#local-install-content-pane {
+    width: 2fr;
+    border: round $primary;
+    padding: 1 2;
+}
+
+#local-install-list-pane DataTable {
+    height: 1fr;
+}
+
+#local-install-content-pane RichLog {
+    height: 1fr;
+}
+
 /* -- Sync Screen -- */
 #sync-screen {
     layout: vertical;

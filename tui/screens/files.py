@@ -24,6 +24,24 @@ from tui.core.config import TTConfig
 from tui.core.system import SystemInfo
 
 
+def _dir_deletions(source: Path, dest: Path) -> list[str]:
+    """Return relative paths that exist under dest but not source — i.e., the
+    files that would be removed by replacing dest with a fresh copy of source."""
+    if not (dest.exists() and dest.is_dir() and source.exists() and source.is_dir()):
+        return []
+    src_rel: set[str] = set()
+    for p in source.rglob("*"):
+        if p.is_file() or p.is_symlink():
+            src_rel.add(str(p.relative_to(source)))
+    deletions: list[str] = []
+    for p in dest.rglob("*"):
+        if p.is_file() or p.is_symlink():
+            rel = str(p.relative_to(dest))
+            if rel not in src_rel:
+                deletions.append(rel)
+    return sorted(deletions)
+
+
 class FileScreen(Screen):
     """View and manage tracked config files."""
 
@@ -77,7 +95,7 @@ class FileScreen(Screen):
         log.write(Text("  r  Remove file from TT config", style="dim"))
         log.write(Text("  m  Move file to another config", style="dim"))
         log.write(Text("  o  Override locally (copy from parent)", style="dim"))
-        log.write(Text("  n  Add new file to TT", style="dim"))
+        log.write(Text("  n  Add new file or directory to TT", style="dim"))
         log.write(Text("  /  Filter files", style="dim"))
         log.write(Text("  Esc  Back", style="dim"))
 
@@ -321,60 +339,128 @@ class FileScreen(Screen):
         self.dismiss(None)
 
     def action_apply_to_system(self) -> None:
-        """Copy repo file to system."""
+        """Copy repo file/dir to system. For directories with files that would
+        be deleted on the system side, ask for confirmation first."""
         sel = self._get_selected()
         if not sel:
             return
         config, stored, target = sel
+        from tui.core.config import _resolve_effective_target
+        eff_target = _resolve_effective_target(stored, target)
+        repo_file = self._tt_config.configs_dir / config / "files" / stored
+        sys_file = Path.home() / eff_target
+        if not repo_file.exists():
+            return
+        if repo_file.is_dir() and sys_file.is_dir():
+            deletions = _dir_deletions(repo_file, sys_file)
+            if deletions:
+                self.app.push_screen(
+                    ConfirmDeletionsScreen(
+                        f"Apply TT → ~/{eff_target}",
+                        deletions,
+                        "delete and apply",
+                    ),
+                    callback=lambda ok: self._do_apply(config, stored, target) if ok else None,
+                )
+                return
+        self._do_apply(config, stored, target)
+
+    def _do_apply(self, config: str, stored: str, target: str) -> None:
+        import shutil
         from tui.core.config import _resolve_effective_target
         repo_file = self._tt_config.configs_dir / config / "files" / stored
         sys_file = Path.home() / _resolve_effective_target(stored, target)
-        if repo_file.exists() and not repo_file.is_dir():
+        if not repo_file.exists():
+            return
+        if repo_file.is_dir():
+            sys_file.parent.mkdir(parents=True, exist_ok=True)
+            if sys_file.exists():
+                if sys_file.is_dir():
+                    shutil.rmtree(sys_file)
+                else:
+                    sys_file.unlink()
+            shutil.copytree(repo_file, sys_file)
+        else:
             sys_file.parent.mkdir(parents=True, exist_ok=True)
             sys_file.write_bytes(repo_file.read_bytes())
-            self._refresh_files()
-            self._show_diff(config, stored, target)
+        self._refresh_files()
+        self._show_diff(config, stored, target)
 
     def action_update_tooltamer(self) -> None:
-        """Copy system file to repo. On inherited files, ask whether to write
-        to the inherited config (affects all hosts) or create a host-local
-        override."""
+        """Copy system file/dir to repo. On inherited entries, ask whether to
+        write to the inherited config (affects all hosts) or create a
+        host-local override."""
         sel = self._get_selected()
         if not sel:
             return
         config, stored, target = sel
         from tui.core.config import _resolve_effective_target
         sys_file = Path.home() / _resolve_effective_target(stored, target)
-        if not sys_file.exists() or sys_file.is_dir():
+        if not sys_file.exists():
             return
         host = self._system.hostname
         if config != host:
             self.app.push_screen(
                 CaptureChoiceScreen(config, host, _resolve_effective_target(stored, target)),
-                callback=lambda choice: self._do_capture(config, stored, target, choice),
+                callback=lambda choice: self._capture_with_check(config, stored, target, choice),
             )
             return
-        self._do_capture(config, stored, target, "parent")
+        self._capture_with_check(config, stored, target, "parent")
 
-    def _do_capture(self, config: str, stored: str, target: str, choice: str | None) -> None:
+    def _capture_with_check(self, config: str, stored: str, target: str, choice: str | None) -> None:
         if choice not in ("parent", "override"):
             return
         from tui.core.config import _resolve_effective_target
-        sys_file = Path.home() / _resolve_effective_target(stored, target)
-        if not sys_file.exists() or sys_file.is_dir():
+        eff_target = _resolve_effective_target(stored, target)
+        sys_path = Path.home() / eff_target
+        host = self._system.hostname
+        if choice == "override":
+            dest_path = self._tt_config.configs_dir / host / "files" / stored
+        else:
+            dest_path = self._tt_config.configs_dir / config / "files" / stored
+        if sys_path.is_dir() and dest_path.is_dir():
+            deletions = _dir_deletions(sys_path, dest_path)
+            if deletions:
+                target_label = host if choice == "override" else config
+                self.app.push_screen(
+                    ConfirmDeletionsScreen(
+                        f"Capture ~/{eff_target} → '{target_label}'",
+                        deletions,
+                        "delete and capture",
+                    ),
+                    callback=lambda ok: self._do_capture(config, stored, target, choice) if ok else None,
+                )
+                return
+        self._do_capture(config, stored, target, choice)
+
+    def _do_capture(self, config: str, stored: str, target: str, choice: str | None) -> None:
+        import shutil
+
+        if choice not in ("parent", "override"):
+            return
+        from tui.core.config import _resolve_effective_target
+        sys_path = Path.home() / _resolve_effective_target(stored, target)
+        if not sys_path.exists():
             return
         host = self._system.hostname
         if choice == "override":
             dest_config = host
-            dest_file = self._tt_config.configs_dir / host / "files" / stored
-            dest_file.parent.mkdir(parents=True, exist_ok=True)
-            dest_file.write_bytes(sys_file.read_bytes())
-            self._tt_config.add_file_mapping(host, stored, target)
+            dest_path = self._tt_config.configs_dir / host / "files" / stored
         else:
             dest_config = config
-            repo_file = self._tt_config.configs_dir / config / "files" / stored
-            repo_file.parent.mkdir(parents=True, exist_ok=True)
-            repo_file.write_bytes(sys_file.read_bytes())
+            dest_path = self._tt_config.configs_dir / config / "files" / stored
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        if sys_path.is_dir():
+            if dest_path.exists():
+                if dest_path.is_dir():
+                    shutil.rmtree(dest_path)
+                else:
+                    dest_path.unlink()
+            shutil.copytree(sys_path, dest_path)
+        else:
+            dest_path.write_bytes(sys_path.read_bytes())
+        if choice == "override":
+            self._tt_config.add_file_mapping(host, stored, target)
         self._refresh_files()
         self._show_diff(dest_config, stored, target)
 
@@ -436,10 +522,73 @@ class FileScreen(Screen):
         self._refresh_files()
 
     def action_add_file(self) -> None:
-        """Add a new file to TT."""
-        self.app.push_screen(
-            AddFileScreen(self._tt_config, self._system),
-        )
+        """Add a new file or directory to TT. Uses fzf when available."""
+        import shutil as _sh
+
+        if _sh.which("fzf"):
+            picked = self._pick_with_fzf()
+            if picked is None:
+                return
+            self.app.push_screen(
+                AddConfigPickScreen(self._tt_config, self._system, picked),
+                callback=lambda _: self._refresh_files(),
+            )
+        else:
+            self.app.push_screen(AddFileScreen(self._tt_config, self._system))
+
+    def _pick_with_fzf(self) -> Path | None:
+        """Suspend the TUI, run fzf to pick a file or directory under ~, return
+        the chosen path (or None if cancelled)."""
+        import shutil as _sh
+        import subprocess
+
+        home = str(Path.home())
+        if _sh.which("fd"):
+            list_cmd = [
+                "fd", "--hidden", "--exclude", ".git",
+                "--type", "f", "--type", "d",
+                ".", home,
+            ]
+        else:
+            list_cmd = [
+                "find", home,
+                "(", "-type", "f", "-o", "-type", "d", ")",
+                "-not", "-path", "*/.git/*",
+            ]
+
+        with self.app.suspend():
+            try:
+                lister = subprocess.Popen(list_cmd, stdout=subprocess.PIPE)
+                result = subprocess.run(
+                    [
+                        "fzf",
+                        "--prompt=add to TT> ",
+                        "--header=pick a file or directory under ~",
+                        "--height=80%",
+                    ],
+                    stdin=lister.stdout, capture_output=True, text=True,
+                )
+                if lister.stdout:
+                    lister.stdout.close()
+                lister.wait()
+            except FileNotFoundError:
+                return None
+
+        if result.returncode != 0:
+            return None
+        picked = result.stdout.strip()
+        if not picked:
+            return None
+        path = Path(picked)
+        if not path.exists():
+            self.notify(f"Path does not exist: {picked}", severity="error")
+            return None
+        try:
+            path.relative_to(Path.home())
+        except ValueError:
+            self.notify("Only paths under ~ can be added", severity="error")
+            return None
+        return path
 
     def on_screen_resume(self) -> None:
         """Refresh when returning from add/move screens."""
@@ -457,6 +606,136 @@ class FileScreen(Screen):
             self.query_one("#file-diff", RichLog).focus()
         else:
             self.query_one("#file-table", DataTable).focus()
+
+
+class ConfirmDeletionsScreen(ModalScreen[bool]):
+    """Confirm a directory sync that would delete files on the destination."""
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("n", "cancel", "No"),
+        ("y", "confirm", "Yes"),
+    ]
+
+    DEFAULT_CSS = """
+    ConfirmDeletionsScreen {
+        align: center middle;
+    }
+    #confirm-del-dialog {
+        width: 90;
+        height: auto;
+        max-height: 80%;
+        border: round $warning;
+        background: $surface;
+        padding: 1 2;
+    }
+    #confirm-del-list {
+        height: 20;
+        max-height: 20;
+        border: round $panel;
+    }
+    """
+
+    def __init__(self, header: str, deletions: list[str], proceed_label: str):
+        super().__init__()
+        self._header = header
+        self._deletions = deletions
+        self._proceed_label = proceed_label
+
+    def compose(self) -> ComposeResult:
+        with Container(id="confirm-del-dialog"):
+            yield Label(Text(self._header, style="bold yellow"))
+            yield Label(Text(""))
+            yield Label(Text(
+                f"{len(self._deletions)} file(s) will be deleted on the destination:",
+                style="bold",
+            ))
+            yield RichLog(id="confirm-del-list", wrap=False, markup=False)
+            yield Label(Text(""))
+            yield Label(Text(f"y={self._proceed_label}    n/Esc=cancel", style="dim"))
+
+    def on_mount(self) -> None:
+        log = self.query_one("#confirm-del-list", RichLog)
+        for path in self._deletions[:200]:
+            log.write(Text(f"  - {path}", style="red"))
+        if len(self._deletions) > 200:
+            log.write(Text(f"  ... and {len(self._deletions) - 200} more", style="dim"))
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class AddConfigPickScreen(ModalScreen[str | None]):
+    """Pick which config to add a previously-chosen file/directory to."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    DEFAULT_CSS = """
+    AddConfigPickScreen {
+        align: center middle;
+    }
+    #add-config-dialog {
+        width: 70;
+        height: auto;
+        max-height: 80%;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, tt_config: TTConfig, system: SystemInfo, source: Path):
+        super().__init__()
+        self._tt_config = tt_config
+        self._system = system
+        self._source = source
+
+    def compose(self) -> ComposeResult:
+        rel = str(self._source.relative_to(Path.home()))
+        kind = "dir" if self._source.is_dir() else "file"
+        suffix = "/" if self._source.is_dir() else ""
+        with Container(id="add-config-dialog"):
+            yield Label(Text.assemble(
+                ("Add ", "bold"),
+                (f"~/{rel}{suffix}", "cyan"),
+                (f"  ({kind})", "dim"),
+            ))
+            yield Label(Text(""))
+            yield Label(Text("Select target config:", style="bold"))
+            options = []
+            host = self._system.hostname
+            for cfg in self._tt_config.list_configs():
+                tag = ""
+                if cfg == host:
+                    tag = " [green][host][/]"
+                elif cfg == "common":
+                    tag = " [cyan][common][/]"
+                options.append(Option(f"{cfg}{tag}", id=cfg))
+            yield OptionList(*options)
+            yield Label(Text(""))
+            yield Label(Text("Esc=cancel", style="dim"))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        import shutil
+
+        dest = str(event.option.id)
+        rel_path = str(self._source.relative_to(Path.home()))
+        dest_target = self._tt_config.configs_dir / dest / "files" / rel_path
+        dest_target.parent.mkdir(parents=True, exist_ok=True)
+        if self._source.is_dir():
+            if dest_target.exists():
+                shutil.rmtree(dest_target)
+            shutil.copytree(self._source, dest_target)
+        else:
+            dest_target.write_bytes(self._source.read_bytes())
+        self._tt_config.add_file_mapping(dest, rel_path, rel_path)
+        self.dismiss(dest)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class CaptureChoiceScreen(ModalScreen[str | None]):
@@ -597,11 +876,11 @@ class MoveFileScreen(ModalScreen[str | None]):
 
 
 class AddFileScreen(Screen):
-    """Browse home directory and add a file to TT management."""
+    """Browse home directory and add a file or directory to TT management."""
 
     BINDINGS = [
         ("escape", "go_back", "Back"),
-        ("enter", "select_file", "Select"),
+        ("plus", "pick_highlighted", "Pick (file or dir)"),
     ]
 
     DEFAULT_CSS = """
@@ -634,7 +913,7 @@ class AddFileScreen(Screen):
 
         yield Header()
         with Container(id="file-browser-pane"):
-            yield Label(Text("Browse ~ to select a file", style="bold"))
+            yield Label(Text("Browse ~ — Enter picks a file, '+' picks file or directory", style="bold"))
             yield DirectoryTree(str(Path.home()), id="dir-tree")
         with Container(id="file-config-pane"):
             yield Label(Text("Select config:", style="bold"))
@@ -653,25 +932,54 @@ class AddFileScreen(Screen):
         yield Footer()
 
     def on_directory_tree_file_selected(self, event) -> None:
-        """When a file is clicked/selected in the tree."""
-        self._selected_path = Path(event.path)
-        rel = str(self._selected_path).removeprefix(str(Path.home()) + "/")
+        """Enter on a file in the tree picks it."""
+        self._set_selected(Path(event.path))
+
+    def action_pick_highlighted(self) -> None:
+        """Pick the currently highlighted node — works for files and directories."""
+        from textual.widgets import DirectoryTree
+        tree = self.query_one("#dir-tree", DirectoryTree)
+        node = tree.cursor_node
+        if node is None or node.data is None:
+            return
+        path = Path(node.data.path)
+        self._set_selected(path)
+        self.query_one("#config-list", OptionList).focus()
+
+    def _set_selected(self, path: Path) -> None:
+        self._selected_path = path
+        try:
+            rel = str(path.relative_to(Path.home()))
+        except ValueError:
+            rel = str(path)
+        suffix = "/" if path.is_dir() else ""
+        kind = "dir" if path.is_dir() else "file"
         label = self.query_one("#selected-file-label", Label)
-        label.update(Text(f"Selected: ~/{rel}", style="cyan"))
+        label.update(Text(f"Selected ({kind}): ~/{rel}{suffix}", style="cyan"))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        import shutil
+
         if self._selected_path is None:
             return
-        sys_file = self._selected_path
-        if not sys_file.is_file():
+        sys_path = self._selected_path
+        if not sys_path.exists():
+            return
+        try:
+            rel_path = str(sys_path.relative_to(Path.home()))
+        except ValueError:
             return
 
-        rel_path = str(sys_file).removeprefix(str(Path.home()) + "/")
         dest = str(event.option.id)
         stored = rel_path
-        dest_file = self._tt_config.configs_dir / dest / "files" / stored
-        dest_file.parent.mkdir(parents=True, exist_ok=True)
-        dest_file.write_bytes(sys_file.read_bytes())
+        dest_target = self._tt_config.configs_dir / dest / "files" / stored
+        dest_target.parent.mkdir(parents=True, exist_ok=True)
+        if sys_path.is_dir():
+            if dest_target.exists():
+                shutil.rmtree(dest_target)
+            shutil.copytree(sys_path, dest_target)
+        else:
+            dest_target.write_bytes(sys_path.read_bytes())
         self._tt_config.add_file_mapping(dest, stored, rel_path)
         self.app.pop_screen()
 
