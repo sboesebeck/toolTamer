@@ -106,6 +106,15 @@ class DashboardScreen(Screen):
         """Refresh dashboard status after returning from a sub-screen."""
         self.query_one(StatusBar).refresh_status()
 
+    def _redraw_after_suspend(self) -> None:
+        """Force a full repaint after returning from a suspended full-screen
+        program (lazygit, package manager). On resume Textual only posts a
+        same-size Resize, which leaves the previous program's output on screen;
+        marking the whole screen dirty redraws it cleanly."""
+        self._on_sub_screen_closed()
+        self.app.refresh(layout=True)
+        self.refresh(layout=True)
+
     def action_menu_action(self, action: str) -> None:
         if action == "packages":
             from tui.screens.packages import PackageScreen
@@ -142,12 +151,12 @@ class DashboardScreen(Screen):
                     result = subprocess.run(cmd)
                     if result.returncode != 0:
                         break
-            self._on_sub_screen_closed()
+            self._redraw_after_suspend()
         elif action == "git":
             import subprocess
             with self.app.suspend():
                 subprocess.run(["lazygit"], cwd=str(self._tt_config.base))
-            self._on_sub_screen_closed()
+            self._redraw_after_suspend()
 
     def action_quit(self) -> None:
         self.app.exit()
