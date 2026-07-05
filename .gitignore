@@ -2,7 +2,8 @@
 .env
 site/
 CLAUDE.md
-
+plans/
+superpowers/
 # Python
 .venv/
 __pycache__/
