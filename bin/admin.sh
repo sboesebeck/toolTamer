@@ -943,6 +943,44 @@ function classify_file() {
       fi
     done <"$conf_file"
   done < <(ls -1 "$BASE/configs")
+
+  # Not mapped directly - check whether it lives inside a tracked directory
+  while IFS= read -r cfg; do
+    [ -z "$cfg" ] && continue
+    local conf_file="$BASE/configs/$cfg/files.conf"
+    [ -f "$conf_file" ] || continue
+    while IFS=';' read -r stored dest; do
+      [ -z "$stored" ] && continue
+      [[ "$stored" =~ ^# ]] && continue
+      stored=$(echo "$stored" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      dest=$(echo "$dest" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      [ -d "$BASE/configs/$cfg/files/$stored" ] || continue
+      local eff="$dest"
+      case "$eff" in
+      */) eff="${eff}$(basename "$stored")" ;;
+      esac
+      case "$rel" in
+      "$eff"/*)
+        local inner="${rel#$eff/}"
+        local repo_file="$BASE/configs/$cfg/files/$stored/$inner"
+        if [ -f "$repo_file" ]; then
+          local repo_hash sys_hash
+          repo_hash=$(shasum <"$repo_file")
+          sys_hash=$(shasum <"$sys_file")
+          if [ "$repo_hash" = "$sys_hash" ]; then
+            echo "identical:$cfg"
+          else
+            echo "modified:$cfg:$repo_file"
+          fi
+        else
+          echo "covered_new:$cfg:$repo_file"
+        fi
+        return 0
+        ;;
+      esac
+    done <"$conf_file"
+  done < <(ls -1 "$BASE/configs")
+
   echo "new"
   return 1
 }
@@ -988,6 +1026,7 @@ function process_single_file() {
         "${BL}S${RESET}kip") || return
       case "${action%%:*}" in
       "1"|"U"|"u")
+        mkdir -p "$(dirname "$repo_file")"
         cp "$abs" "$repo_file"
         log "${GN}Updated$RESET ${repo_file##$BASE/configs/} from system"
         break
@@ -1007,6 +1046,15 @@ function process_single_file() {
         ;;
       esac
     done
+    ;;
+  covered_new:*)
+    local cfg repo_file
+    cfg=$(echo "$classification" | cut -d: -f2)
+    repo_file=$(echo "$classification" | cut -d: -f3-)
+    log "${CN}$rel$RESET is inside a tracked directory of ${BL}$cfg$RESET — updating snapshot, no new entry"
+    mkdir -p "$(dirname "$repo_file")"
+    cp "$abs" "$repo_file"
+    log "${GN}Added$RESET to directory snapshot ${repo_file##$BASE/configs/}"
     ;;
   new)
     log "${CN}New file$RESET $rel — not yet tracked"
@@ -1068,7 +1116,9 @@ function process_directory_batch() {
   fi
 
   # Build lookup table: tracked_dest[rel_path] = "config;stored_name"
+  # plus a list of tracked directory entries: "eff_target|config|stored"
   declare -A tracked_dest
+  local tracked_dirs=()
   while IFS= read -r cfg; do
     [ -z "$cfg" ] && continue
     local conf_file="$BASE/configs/$cfg/files.conf"
@@ -1077,10 +1127,19 @@ function process_directory_batch() {
       [ -z "$stored" ] && continue
       [[ "$stored" =~ ^# ]] && continue
       # trim whitespace (pure bash, no sed)
+      stored="${stored#"${stored%%[![:space:]]*}"}"
+      stored="${stored%"${stored##*[![:space:]]}"}"
       dest="${dest#"${dest%%[![:space:]]*}"}"
       dest="${dest%"${dest##*[![:space:]]}"}"
       [ -z "$dest" ] && continue
       tracked_dest["$dest"]="$cfg;$stored"
+      if [ -d "$BASE/configs/$cfg/files/$stored" ]; then
+        local eff="$dest"
+        case "$eff" in
+        */) eff="${eff}$(basename "$stored")" ;;
+        esac
+        tracked_dirs+=("$eff|$cfg|$stored")
+      fi
     done <"$conf_file"
   done < <(ls -1 "$BASE/configs")
 
@@ -1095,6 +1154,41 @@ function process_directory_batch() {
     local rel="${f#$HOME/}"
     local entry="${tracked_dest[$rel]:-}"
     if [ -z "$entry" ]; then
+      # not mapped directly - covered by a tracked directory?
+      local covered=""
+      local de
+      for de in "${tracked_dirs[@]}"; do
+        local d_eff="${de%%|*}"
+        case "$rel" in
+        "$d_eff"/*)
+          covered="$de"
+          break
+          ;;
+        esac
+      done
+      if [ -n "$covered" ]; then
+        local d_eff="${covered%%|*}"
+        local d_rest="${covered#*|}"
+        local d_cfg="${d_rest%%|*}"
+        local d_stored="${d_rest#*|}"
+        local repo_file="$BASE/configs/$d_cfg/files/$d_stored/${rel#$d_eff/}"
+        if [ -f "$repo_file" ]; then
+          local repo_hash sys_hash
+          repo_hash=$(shasum <"$repo_file")
+          sys_hash=$(shasum <"$f")
+          if [ "$repo_hash" = "$sys_hash" ]; then
+            ((identical_count++)) || true
+          else
+            fzf_lines+=("MOD|$f|$repo_file|$d_cfg|[MOD] $rel (dir in $d_cfg)")
+            ((mod_count++)) || true
+          fi
+        else
+          # new file inside a tracked directory - belongs into the snapshot
+          fzf_lines+=("MOD|$f|$repo_file|$d_cfg|[NEW>dir] $rel (dir in $d_cfg)")
+          ((mod_count++)) || true
+        fi
+        continue
+      fi
       fzf_lines+=("NEW|$f|||[NEW] $rel")
       ((new_count++)) || true
     else
@@ -1189,6 +1283,7 @@ function process_directory_batch() {
         local abs repo_file
         abs=$(echo "$line" | cut -d'|' -f2)
         repo_file=$(echo "$line" | cut -d'|' -f3)
+        mkdir -p "$(dirname "$repo_file")"
         cp "$abs" "$repo_file"
         log "${GN}Updated$RESET ${repo_file##$BASE/configs/}"
       done

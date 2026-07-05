@@ -254,6 +254,18 @@ function syncFile() {
     return
   fi
 
+  if [ -d "$gitfile" ]; then
+    # Tracked directory: full mirror TT -> system including deletions
+    syncDirToSystem "$gitfile" "$dotfile"
+    return
+  fi
+  if [ -d "$dotfile" ]; then
+    # Repo tracks a file but the system has a directory there
+    log "${YL}type change${RESET} - backing up directory $dotfile"
+    rm -rf "$dotfile.ttbak"
+    mv "$dotfile" "$dotfile.ttbak"
+  fi
+
   logn "Comparing ${GN}$dotfile${RESET} <-> ${BL}${gitfile##$BASE/configs/}${RESET}....."
   if [ -e "$dotfile" ]; then
     s1=$(shasum <"$dotfile")
@@ -471,8 +483,16 @@ function updatingTTFromSystemFiles() {
       continue
     fi
     if [ -d "$dotfile" ]; then
-      log "  ${YL}Skip${RESET} $dotfile (directory sync not supported)"
-      ((skipped = skipped + 1))
+      captureDirFromSystem "$dotfile" "$gitfile"
+      case $? in
+      0)
+        log "  ${GN}Captured${RESET} dir ${dotfile#$HOME/} -> ${gitfile##$BASE/configs/}"
+        ((updated = updated + 1))
+        ;;
+      2)
+        ((skipped = skipped + 1))
+        ;;
+      esac
       continue
     fi
     mkdir -p "$(dirname "$gitfile")"

@@ -89,6 +89,118 @@ function createEffectiveFilesList() {
   done
 }
 
+# Content hash of a directory tree (all regular files + symlinks, path-stable).
+# Prints "missing" for non-directories so comparisons always differ.
+function treeHash() {
+  local dir="$1"
+  if [ ! -d "$dir" ]; then
+    echo "missing"
+    return 1
+  fi
+  (
+    cd "$dir" || exit 1
+    find . \( -type f -o -type l \) -print0 2>/dev/null | sort -z | while IFS= read -r -d '' f; do
+      if [ -L "$f" ]; then
+        printf 'link %s -> %s\n' "$f" "$(readlink "$f")"
+      else
+        printf '%s %s\n' "$(shasum <"$f" | cut -f1 -d' ')" "$f"
+      fi
+    done
+  ) | shasum | cut -f1 -d' '
+}
+
+# Print relative paths that exist in $2 (dest) but not in $1 (src) —
+# the files a mirror operation would delete on the destination.
+function listDirExtras() {
+  local src="$1"
+  local dst="$2"
+  [ -d "$dst" ] || return 0
+  (cd "$dst" && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') | while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    if [ ! -e "$src/$f" ] && [ ! -L "$src/$f" ]; then
+      echo "$f"
+    fi
+  done
+}
+
+# Mirror directory $1 into $2: full copy including deletion of files that
+# are not present in the source. Uses rsync when available.
+function mirrorDir() {
+  local src="$1"
+  local dst="$2"
+  mkdir -p "$dst" || return 1
+  if command -v rsync >/dev/null 2>&1; then
+    if rsync -a --delete "$src/" "$dst/"; then
+      return 0
+    fi
+    warn "rsync failed - falling back to manual mirror"
+  fi
+  (cd "$src" && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') | while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    mkdir -p "$dst/$(dirname "$f")"
+    if [ -L "$src/$f" ]; then
+      ln -sfn "$(readlink "$src/$f")" "$dst/$f"
+    else
+      cp -p "$src/$f" "$dst/$f"
+    fi
+  done
+  listDirExtras "$src" "$dst" | while IFS= read -r f; do
+    rm -f "$dst/$f"
+  done
+  find "$dst" -mindepth 1 -depth -type d -empty -delete 2>/dev/null
+  return 0
+}
+
+# Sync a tracked directory from the TT store to the system (TT -> system).
+# Performs a full mirror: extra files on the system side are deleted.
+function syncDirToSystem() {
+  local gitdir="$1"
+  local sysdir="$2"
+  logn "Comparing dir ${GN}$sysdir${RESET} <-> ${BL}${gitdir##$BASE/configs/}${RESET}....."
+  if [ -e "$sysdir" ] && [ ! -d "$sysdir" ]; then
+    log "${YL}target exists as file${RESET} - backing up, replacing with directory"
+    rm -rf "$sysdir.ttbak"
+    mv "$sysdir" "$sysdir.ttbak"
+  fi
+  if [ -d "$sysdir" ] && [ "$(treeHash "$gitdir")" = "$(treeHash "$sysdir")" ]; then
+    log "${GN}Ok${RESET}"
+    return
+  fi
+  log "${YL}directories differ...${RESET} - mirroring (incl. deletions)"
+  local extra
+  while IFS= read -r extra; do
+    [ -z "$extra" ] && continue
+    log "  ${RD}deleting$RESET $sysdir/$extra (not in ToolTamer)"
+    logf "dir-sync: deleted $sysdir/$extra"
+  done < <(listDirExtras "$gitdir" "$sysdir")
+  mkdir -p "$(dirname "$sysdir")"
+  mirrorDir "$gitdir" "$sysdir" || err "Directory sync failed for $sysdir"
+}
+
+# Capture a system directory into the TT store (system -> TT).
+# Performs a full mirror: files removed on the system are removed in TT too.
+function captureDirFromSystem() {
+  local sysdir="$1"
+  local gitdir="$2"
+  if [ -e "$gitdir" ] && [ ! -d "$gitdir" ]; then
+    rm -f "$gitdir"
+  fi
+  if [ -d "$gitdir" ] && [ "$(treeHash "$sysdir")" = "$(treeHash "$gitdir")" ]; then
+    return 1
+  fi
+  local extra
+  while IFS= read -r extra; do
+    [ -z "$extra" ] && continue
+    logf "capture: removed ${gitdir##$BASE/configs/}/$extra (deleted on system)"
+  done < <(listDirExtras "$sysdir" "$gitdir")
+  mkdir -p "$(dirname "$gitdir")"
+  mirrorDir "$sysdir" "$gitdir" || {
+    err "Capture failed for $sysdir"
+    return 2
+  }
+  return 0
+}
+
 function getInstalledPackages() {
   logn "Preparing list of software for $HOST..."
   for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do

@@ -20,7 +20,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from tui.core.config import TTConfig
+from tui.core.config import TTConfig, dir_diff, tree_hash, tree_signature
 from tui.core.system import SystemInfo
 
 
@@ -29,17 +29,7 @@ def _dir_deletions(source: Path, dest: Path) -> list[str]:
     files that would be removed by replacing dest with a fresh copy of source."""
     if not (dest.exists() and dest.is_dir() and source.exists() and source.is_dir()):
         return []
-    src_rel: set[str] = set()
-    for p in source.rglob("*"):
-        if p.is_file() or p.is_symlink():
-            src_rel.add(str(p.relative_to(source)))
-    deletions: list[str] = []
-    for p in dest.rglob("*"):
-        if p.is_file() or p.is_symlink():
-            rel = str(p.relative_to(dest))
-            if rel not in src_rel:
-                deletions.append(rel)
-    return sorted(deletions)
+    return dir_diff(source, dest)[1]
 
 
 class FileScreen(Screen):
@@ -60,6 +50,8 @@ class FileScreen(Screen):
         super().__init__()
         self._tt_config = tt_config
         self._system = system
+        # tree-hash cache: path -> (stat signature, content hash)
+        self._tree_cache: dict[str, tuple[str, str]] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -166,13 +158,29 @@ class FileScreen(Screen):
         if event.input.id == "file-filter":
             self._load_files(filter_text=event.value)
 
+    def _cached_tree_hash(self, root: Path) -> str:
+        key = str(root)
+        sig = tree_signature(root)
+        cached = self._tree_cache.get(key)
+        if cached and cached[0] == sig:
+            return cached[1]
+        h = tree_hash(root)
+        self._tree_cache[key] = (sig, h)
+        return h
+
     def _file_status(self, repo: Path, system: Path) -> str:
         if not repo.exists():
             return "missing_repo"
         if not system.exists():
             return "missing_system"
+        if repo.is_dir() and system.is_dir():
+            try:
+                return "ok" if self._cached_tree_hash(repo) == self._cached_tree_hash(system) else "modified"
+            except (OSError, PermissionError):
+                return "ok"
         if repo.is_dir() or system.is_dir():
-            return "ok"
+            # type mismatch (dir vs file) — needs a sync
+            return "modified"
         try:
             repo_hash = hashlib.sha1(repo.read_bytes()).hexdigest()
             sys_hash = hashlib.sha1(system.read_bytes()).hexdigest()
@@ -300,8 +308,44 @@ class FileScreen(Screen):
             self.app.call_from_thread(log.write, Text("Repo file missing", style="red"))
         elif not sys_file.exists():
             self.app.call_from_thread(log.write, Text("System file missing (a=apply from TT)", style="red"))
+        elif repo_file.is_dir() and sys_file.is_dir():
+            only_repo, only_sys, changed = dir_diff(repo_file, sys_file)
+            if not (only_repo or only_sys or changed):
+                self.app.call_from_thread(log.write, Text("Directories are identical", style="green"))
+            else:
+                self.app.call_from_thread(
+                    log.write,
+                    Text(
+                        f"Directories differ: {len(only_repo)} only in TT, "
+                        f"{len(only_sys)} only on system, {len(changed)} changed",
+                        style="yellow",
+                    ),
+                )
+                self.app.call_from_thread(log.write, Text(""))
+                shown = 0
+                for rel in only_repo:
+                    if shown >= 60:
+                        break
+                    self.app.call_from_thread(log.write, Text(f"+ {rel}  (a=apply creates it)", style="green"))
+                    shown += 1
+                for rel in only_sys:
+                    if shown >= 60:
+                        break
+                    self.app.call_from_thread(log.write, Text(f"x {rel}  (a=apply DELETES it)", style="red"))
+                    shown += 1
+                for rel in changed:
+                    if shown >= 60:
+                        break
+                    self.app.call_from_thread(log.write, Text(f"~ {rel}  (content differs)", style="yellow"))
+                    shown += 1
+                total = len(only_repo) + len(only_sys) + len(changed)
+                if total > shown:
+                    self.app.call_from_thread(log.write, Text(f"... and {total - shown} more", style="dim"))
         elif repo_file.is_dir() or sys_file.is_dir():
-            self.app.call_from_thread(log.write, Text("Directory target — no diff available", style="dim"))
+            self.app.call_from_thread(
+                log.write,
+                Text("Type mismatch: one side is a directory, the other a file (a=apply TT version)", style="red"),
+            )
         else:
             repo_hash = hashlib.sha1(repo_file.read_bytes()).hexdigest()
             sys_hash = hashlib.sha1(sys_file.read_bytes()).hexdigest()
@@ -769,19 +813,13 @@ class AddConfigPickScreen(ModalScreen[str | None]):
             yield Label(Text("Esc=cancel", style="dim"))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        import shutil
-
         dest = str(event.option.id)
-        rel_path = str(self._source.relative_to(Path.home()))
-        dest_target = self._tt_config.configs_dir / dest / "files" / rel_path
-        dest_target.parent.mkdir(parents=True, exist_ok=True)
-        if self._source.is_dir():
-            if dest_target.exists():
-                shutil.rmtree(dest_target)
-            shutil.copytree(self._source, dest_target)
-        else:
-            dest_target.write_bytes(self._source.read_bytes())
-        self._tt_config.add_file_mapping(dest, rel_path, rel_path)
+        report = self._tt_config.add_path(dest, self._source, self._system.hostname)
+        for line in report[:8]:
+            severity = "warning" if line.startswith("WARNING") else "information"
+            self.app.notify(line, severity=severity, timeout=8)
+        if len(report) > 8:
+            self.app.notify(f"... and {len(report) - 8} more changes", timeout=8)
         self.dismiss(dest)
 
     def action_cancel(self) -> None:
@@ -1034,29 +1072,23 @@ class AddFileScreen(Screen):
         label.update(Text(f"Selected ({kind}): ~/{rel}{suffix}", style="cyan"))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        import shutil
-
         if self._selected_path is None:
             return
         sys_path = self._selected_path
         if not sys_path.exists():
             return
         try:
-            rel_path = str(sys_path.relative_to(Path.home()))
+            sys_path.relative_to(Path.home())
         except ValueError:
             return
 
         dest = str(event.option.id)
-        stored = rel_path
-        dest_target = self._tt_config.configs_dir / dest / "files" / stored
-        dest_target.parent.mkdir(parents=True, exist_ok=True)
-        if sys_path.is_dir():
-            if dest_target.exists():
-                shutil.rmtree(dest_target)
-            shutil.copytree(sys_path, dest_target)
-        else:
-            dest_target.write_bytes(sys_path.read_bytes())
-        self._tt_config.add_file_mapping(dest, stored, rel_path)
+        report = self._tt_config.add_path(dest, sys_path, self._system.hostname)
+        for line in report[:8]:
+            severity = "warning" if line.startswith("WARNING") else "information"
+            self.app.notify(line, severity=severity, timeout=8)
+        if len(report) > 8:
+            self.app.notify(f"... and {len(report) - 8} more changes", timeout=8)
         self.app.pop_screen()
 
     def action_go_back(self) -> None:

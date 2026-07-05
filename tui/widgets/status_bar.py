@@ -9,7 +9,7 @@ from textual.containers import Horizontal
 from textual.widget import Widget
 from textual.widgets import Label
 
-from tui.core.config import TTConfig
+from tui.core.config import TTConfig, tree_hash
 from tui.core.system import SystemInfo
 
 
@@ -120,8 +120,15 @@ class StatusBar(Widget):
             sys_file = home / m.effective_target
             if not m.repo_path.exists() or not sys_file.exists():
                 missing_file_names.append(m.effective_target)
+            elif sys_file.is_dir() and m.repo_path.is_dir():
+                try:
+                    if tree_hash(m.repo_path) != tree_hash(sys_file):
+                        modified_files.append(m.effective_target)
+                except (OSError, PermissionError):
+                    continue
             elif sys_file.is_dir() or m.repo_path.is_dir():
-                continue
+                # type mismatch counts as changed
+                modified_files.append(m.effective_target)
             else:
                 try:
                     if hashlib.sha1(m.repo_path.read_bytes()).hexdigest() != hashlib.sha1(sys_file.read_bytes()).hexdigest():
