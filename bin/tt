@@ -726,6 +726,13 @@ if [ $# -gt 0 ]; then
   esac
 fi
 
+# No arguments: open the Textual TUI, the same one as `tt --admin`. It already
+# offers every action of the classic menu below (and more), so it is the single
+# main menu. launch_tui execs on success, so the classic menu is only reached as
+# a fallback when Python/Textual is unavailable.
+launch_tui
+warn "TUI unavailable — falling back to classic menu"
+
 export updateSys="Update local installation $HOST from ToolTamer structure\nupdates installed tools, config files on change"
 export updateTT="Take a snapshot of current installation\nput files from this installation to ToolTamer"
 export show="Show configuration of ToolTamer"
