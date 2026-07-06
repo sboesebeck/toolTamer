@@ -116,6 +116,36 @@ def test_get_effective_file_mappings_exposes_shadowed_duplicates(tmp_config: Pat
     assert shadowed.shadowed_by == "testhost"
 
 
+def test_remove_file_deletes_orphaned_stored_copy(sample_files: Path):
+    """Removing a file mapping must also delete its stored copy, otherwise it
+    becomes an orphan in configs/<config>/files/ that is no longer referenced
+    by files.conf."""
+    cfg = TTConfig(sample_files)
+    stored_copy = sample_files / "configs" / "testhost" / "files" / "kitty.conf"
+    assert stored_copy.exists()
+
+    deleted = cfg.remove_file("testhost", "kitty.conf", ".config/kitty/kitty.conf")
+
+    assert deleted is True
+    assert not stored_copy.exists()
+    assert ("kitty.conf", ".config/kitty/kitty.conf") not in cfg.get_file_mappings("testhost")
+
+
+def test_remove_file_keeps_stored_copy_still_referenced(sample_files: Path):
+    """When two mappings share the same stored file, removing one must NOT
+    delete the stored copy the other still points at."""
+    host_conf = sample_files / "configs" / "testhost" / "files.conf"
+    host_conf.write_text(host_conf.read_text() + "kitty.conf;.config/kitty/other.conf\n")
+    cfg = TTConfig(sample_files)
+    stored_copy = sample_files / "configs" / "testhost" / "files" / "kitty.conf"
+
+    deleted = cfg.remove_file("testhost", "kitty.conf", ".config/kitty/kitty.conf")
+
+    assert deleted is False
+    assert stored_copy.exists()
+    assert ("kitty.conf", ".config/kitty/other.conf") in cfg.get_file_mappings("testhost")
+
+
 def test_resolve_chain(tmp_config: Path):
     cfg = TTConfig(tmp_config)
     chain = cfg.resolve_chain("testhost")

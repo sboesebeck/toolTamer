@@ -277,6 +277,16 @@ class TTConfig:
             filtered.append(line)
         conf_file.write_text("\n".join(filtered) + "\n" if filtered else "")
 
+    def remove_file(self, config: str, stored: str, target: str) -> bool:
+        """Stop managing a file: drop its files.conf entry and delete the
+        stored copy under configs/<config>/files/ unless something else still
+        references it (another mapping, or a tracked directory snapshot it
+        lives inside). Returns True if the stored copy was deleted.
+
+        Removing only the mapping would leave the stored copy orphaned."""
+        self.remove_file_mapping(config, stored, target)
+        return self._delete_stored_if_unreferenced(config, stored)
+
     def find_covering_dir(self, rel: str, configs) -> FileMapping | None:
         """Find a tracked directory entry whose effective target contains
         `rel`. Searches the given config names; the deepest (longest) match

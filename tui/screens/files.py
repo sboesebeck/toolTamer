@@ -544,11 +544,13 @@ class FileScreen(Screen):
         config, stored, target = sel
         from tui.core.config import _resolve_effective_target
         eff_target = _resolve_effective_target(stored, target)
-        self._tt_config.remove_file_mapping(config, stored, target)
+        deleted = self._tt_config.remove_file(config, stored, target)
         log = self.query_one("#file-diff", RichLog)
         log.clear()
         log.write(Text(f"Removed ~/{eff_target} from {config}", style="green"))
         log.write(Text("File remains on system, just no longer managed by TT.", style="dim"))
+        if deleted:
+            log.write(Text("Stored copy deleted from the TT config.", style="dim"))
         self._refresh_files()
 
     def action_move_file(self) -> None:
