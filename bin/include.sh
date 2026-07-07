@@ -43,6 +43,32 @@ function logf() {
   echo -e "$1" >>$TMP/log
 }
 
+# Record a change for the end-of-run summary: note "<category>" "<detail>"
+# Written to a file because the sync loops run in subshells where
+# variables would not survive.
+function note() {
+  echo "$1;$2" >>$TMP/summary
+}
+
+# Print all recorded changes grouped by category, then reset the record
+# so the next action in the menu loop starts with a clean slate.
+function printSummary() {
+  echo
+  log "---------> ${CN}Summary of changes$RESET <-----------"
+  if [ ! -s "$TMP/summary" ]; then
+    log "${GN}No changes${RESET} - everything was already in sync."
+    echo
+    return
+  fi
+  cut -f1 -d';' "$TMP/summary" | awk '!seen[$0]++' | while IFS= read -r category; do
+    cnt=$(grep -c "^$category;" "$TMP/summary")
+    log "${BL}$category$RESET ($cnt):"
+    grep "^$category;" "$TMP/summary" | cut -f2- -d';' | sed 's/^/    /'
+  done
+  echo
+  : >"$TMP/summary"
+}
+
 function fzf_available() {
   [ "${HAVE_FZF:-0}" -eq 1 ]
 }
@@ -172,9 +198,15 @@ function syncDirToSystem() {
     [ -z "$extra" ] && continue
     log "  ${RD}deleting$RESET $sysdir/$extra (not in ToolTamer)"
     logf "dir-sync: deleted $sysdir/$extra"
+    note "Deleted file (dir sync)" "$sysdir/$extra"
   done < <(listDirExtras "$gitdir" "$sysdir")
   mkdir -p "$(dirname "$sysdir")"
-  mirrorDir "$gitdir" "$sysdir" || err "Directory sync failed for $sysdir"
+  if mirrorDir "$gitdir" "$sysdir"; then
+    note "Updated directory" "$sysdir"
+  else
+    err "Directory sync failed for $sysdir"
+    note "Failed directory sync" "$sysdir"
+  fi
 }
 
 # Capture a system directory into the TT store (system -> TT).

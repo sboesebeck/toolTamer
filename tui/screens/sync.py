@@ -43,6 +43,10 @@ class SyncScreen(Screen):
 
         with self.app.suspend():
             result = subprocess.run(["bash", str(tt_script), flag])
+            try:
+                input("\n[press Enter to return to TUI] ")
+            except EOFError:
+                pass
 
         if result.returncode == 0:
             self.notify("Sync complete", severity="information")

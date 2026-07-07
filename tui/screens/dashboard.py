@@ -151,6 +151,10 @@ class DashboardScreen(Screen):
                     result = subprocess.run(cmd)
                     if result.returncode != 0:
                         break
+                try:
+                    input("\n[press Enter to return to TUI] ")
+                except EOFError:
+                    pass
             self._redraw_after_suspend()
         elif action == "git":
             import subprocess

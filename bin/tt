@@ -280,7 +280,12 @@ function syncFile() {
       if [ -e "$dotfile" ]; then
         mv "$dotfile" "$dotfile.ttbak"
       fi
-      cp "$gitfile" "$dotfile" || err "Copy failed"
+      if cp "$gitfile" "$dotfile"; then
+        note "Updated file" "$dotfile (backup: $dotfile.ttbak)"
+      else
+        err "Copy failed"
+        note "Failed to update file" "$dotfile"
+      fi
     fi
   else
     log "${RED}no $dotfile${RESET}"
@@ -290,7 +295,12 @@ function syncFile() {
     if [ -e "$dotfile" ]; then
       mv "$dotfile" "$dotfile.ttbak"
     fi
-    cp "$gitfile" "$dotfile" || err "Copy failed"
+    if cp "$gitfile" "$dotfile"; then
+      note "Created file" "$dotfile"
+    else
+      err "Copy failed"
+      note "Failed to create file" "$dotfile"
+    fi
   fi
 }
 
@@ -309,6 +319,7 @@ function updateTTFromInstallation() {
     if [ $found -eq 0 ]; then
       log "${RD}Missing$RESET - adding to Host"
       echo "$l" >>$BASE/configs/$HOST/to_install.$INSTALLER
+      note "Added to install list ($HOST)" "$l"
     fi
 
   done
@@ -318,7 +329,8 @@ function updateTTFromInstallation() {
 function updatePackageManager() {
   if [ -n "$UPDATE" ]; then
     log "Updating package manager index ($INSTALLER)..."
-    $UPDATE || { err "Package manager update failed"; return 1; }
+    # UPDATE contains shell operators (&&) - must run through a shell like LIST/USES
+    bash -c "$UPDATE" || { err "Package manager update failed"; return 1; }
     log "${GN}Package index updated$RESET"
   fi
   return 0
@@ -360,10 +372,16 @@ function syncInstall() {
           logf "$l is dependency of $deps packages"
           logf "adding $l to install list for $HOST"
           echo "$l" >>$BASE/configs/$HOST/to_install.$INSTALLER
+          note "Kept as dependency (added to install list)" "$l"
         else
           logn "${RD}R${RESET}"
           logf "Removing ${RD}$l$RESET from system - is not in list"
-          $UNINSTALL $l || err "Uninstall of $l failed"
+          if $UNINSTALL $l; then
+            note "Removed package" "$l"
+          else
+            err "Uninstall of $l failed"
+            note "Failed to remove package" "$l"
+          fi
         fi
       fi
     else
@@ -385,10 +403,14 @@ function syncInstall() {
       continue
     fi
     if ! grep "$l" $TMP/local_installed >/dev/null 2>&1; then
-      $INSTALL "$l" </dev/tty >>$TMP/log 2>&1 && logn "${GN}I$RESET" || {
+      if $INSTALL "$l" </dev/tty >>$TMP/log 2>&1; then
+        logn "${GN}I$RESET"
+        note "Installed package" "$l"
+      else
         logf "Installation of $l failed"
         logn "${RD}E$RESET"
-      }
+        note "Failed to install package" "$l"
+      fi
     else
       logn "."
     fi
@@ -408,14 +430,24 @@ function syncInstall() {
       if ! grep $l $TMP/taps.sorted >/dev/null 2>&1; then
         logn "${RD}R$RESET"
         logf "Removing tap $l"
-        brew untap $l || err "Untapping $l failed"
+        if brew untap $l; then
+          note "Removed tap" "$l"
+        else
+          err "Untapping $l failed"
+          note "Failed to remove tap" "$l"
+        fi
       else
         logn "."
       fi
     done
     cat $TMP/taps.sorted | while read l; do
       if ! grep $l $TMP/local_taps >/dev/null; then
-        brew tap $l || err "Tapping $l failed"
+        if brew tap $l; then
+          note "Added tap" "$l"
+        else
+          err "Tapping $l failed"
+          note "Failed to add tap" "$l"
+        fi
         logn "${GN}I$RESET"
       else
         logn "."
@@ -487,6 +519,7 @@ function updatingTTFromSystemFiles() {
       case $? in
       0)
         log "  ${GN}Captured${RESET} dir ${dotfile#$HOME/} -> ${gitfile##$BASE/configs/}"
+        note "Captured into ToolTamer" "$dotfile (directory)"
         ((updated = updated + 1))
         ;;
       2)
@@ -507,6 +540,7 @@ function updatingTTFromSystemFiles() {
     fi
     cp "$dotfile" "$gitfile"
     log "  ${GN}Captured${RESET} ${dotfile#$HOME/} -> ${gitfile##$BASE/configs/}"
+    note "Captured into ToolTamer" "$dotfile"
     ((updated = updated + 1))
   done < $TMP/to_copy.lst
   if [ "$updated" -eq 0 ]; then
@@ -540,6 +574,7 @@ BASE=$HOME/.config/toolTamer/
 TMP=/tmp/tt$$
 mkdir $TMP
 touch $TMP/log
+touch $TMP/summary
 cd $BASE
 
 ##### STARTUP
@@ -680,6 +715,7 @@ if [ $# -gt 0 ]; then
     log "All tasks ${GN}done$RESET"
     log "Logs:"
     cat $TMP/log
+    printSummary
     exit 0
     ;;
   --syncFilesOnly)
@@ -687,6 +723,7 @@ if [ $# -gt 0 ]; then
     log "All tasks ${GN}done$RESET"
     log "Logs:"
     cat $TMP/log
+    printSummary
     exit 0
     ;;
   --updateToolTamer)
@@ -694,6 +731,7 @@ if [ $# -gt 0 ]; then
     log "All tasks ${GN}done$RESET"
     log "Logs:"
     cat $TMP/log
+    printSummary
     exit 0
     ;;
   --updateToolTamerFiles)
@@ -702,6 +740,7 @@ if [ $# -gt 0 ]; then
     log "All tasks ${GN}done$RESET"
     log "Logs:"
     cat $TMP/log
+    printSummary
     exit 0
     ;;
   --add)
@@ -759,16 +798,19 @@ while true; do
     syncInstall
     syncTTtoSystemFiles
     runLocalInstall
+    printSummary
     pause_before_menu
     ;;
   "2" | "F" | "f")
     syncTTtoSystemFiles
+    printSummary
     pause_before_menu
     ;;
   "3" | "s" | "S")
     updateTTFromInstallation
     log "updating TT files from this system"
     updatingTTFromSystemFiles
+    printSummary
     pause_before_menu
     ;;
   "4" | "a" | "A")
