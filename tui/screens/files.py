@@ -882,19 +882,30 @@ class SaveChoiceScreen(ModalScreen[str | None]):
             yield Label(Text(""))
             yield Label(Text("What should be saved, and where?", style="bold"))
             yield Label(Text(""))
+            # Plain Text prompts: "[a]"/"[l]"/"[c]" would be parsed as Rich
+            # markup style tags ("c" means conceal — invisible options).
             options = []
             if self._system_exists:
                 options.append(Option(
-                    f"[a] Current system state → '{self._parent_config}' (affects all hosts)",
+                    Text.assemble(
+                        ("[a]", "bold yellow"),
+                        (f" Current system state → '{self._parent_config}' (affects all hosts)", ""),
+                    ),
                     id="system_parent",
                 ))
                 options.append(Option(
-                    f"[l] Current system state → LOCAL override (only {self._host})",
+                    Text.assemble(
+                        ("[l]", "bold yellow"),
+                        (f" Current system state → LOCAL override (only {self._host})", ""),
+                    ),
                     id="system_override",
                 ))
             if self._repo_exists:
                 options.append(Option(
-                    f"[c] Copy '{self._parent_config}' version → LOCAL override to edit (only {self._host})",
+                    Text.assemble(
+                        ("[c]", "bold yellow"),
+                        (f" Copy '{self._parent_config}' version → LOCAL override to edit (only {self._host})", ""),
+                    ),
                     id="repo_override",
                 ))
             yield OptionList(*options)
