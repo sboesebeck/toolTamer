@@ -8,6 +8,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.widget import Widget
 from textual.widgets import Label
+from textual.worker import get_current_worker
 
 from tui.core.config import TTConfig, tree_hash
 from tui.core.system import SystemInfo
@@ -59,8 +60,9 @@ class StatusBar(Widget):
         """Re-run the status scan (call after returning from sub-screens)."""
         self._scan_status()
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def _scan_status(self) -> None:
+        worker = get_current_worker()
         host = self._system.hostname
         installer = self._system.installer
 
@@ -99,6 +101,8 @@ class StatusBar(Widget):
             pkg_text = f"{total_pkgs} managed"
             pkg_details = ""
 
+        if worker.is_cancelled:
+            return
         self.app.call_from_thread(
             self.query_one("#pkg-count", Label).update, pkg_text
         )
@@ -157,6 +161,8 @@ class StatusBar(Widget):
             file_detail_parts.append(f"[red]Missing:[/] {names}")
         file_details = " | ".join(file_detail_parts) if file_detail_parts else ""
 
+        if worker.is_cancelled:
+            return
         self.app.call_from_thread(
             self.query_one("#file-count", Label).update, file_text
         )
