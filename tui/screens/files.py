@@ -324,6 +324,52 @@ class FileScreen(Screen):
                     ),
                 )
                 self.app.call_from_thread(log.write, Text(""))
+
+                if changed:
+                    worker = get_current_worker()
+                    diff_result = render_changed_diffs(repo_file, sys_file, changed)
+                    for cf in diff_result.files:
+                        if worker.is_cancelled:
+                            return
+                        self.app.call_from_thread(
+                            log.write, Text(f"~ {cf.rel}  (content differs)", style="yellow")
+                        )
+                        if cf.diff_lines:
+                            for diff_line in cf.diff_lines:
+                                line = Text(diff_line)
+                                if diff_line.startswith("+"):
+                                    line.stylize("green")
+                                elif diff_line.startswith("-"):
+                                    line.stylize("red")
+                                elif diff_line.startswith("@@"):
+                                    line.stylize("cyan")
+                                self.app.call_from_thread(log.write, line)
+                            self.app.call_from_thread(log.write, Text(""))
+                        elif cf.binary_line:
+                            self.app.call_from_thread(log.write, Text(cf.binary_line, style="dim"))
+                            self.app.call_from_thread(log.write, Text(""))
+                        elif cf.symlink_line:
+                            self.app.call_from_thread(log.write, Text(cf.symlink_line, style="cyan"))
+                            self.app.call_from_thread(log.write, Text(""))
+                        elif cf.error:
+                            self.app.call_from_thread(log.write, Text(cf.error, style="red"))
+                            self.app.call_from_thread(log.write, Text(""))
+
+                    if diff_result.diff_unavailable:
+                        self.app.call_from_thread(
+                            log.write, Text("diff command not available", style="dim")
+                        )
+                        self.app.call_from_thread(log.write, Text(""))
+                    if diff_result.truncated:
+                        self.app.call_from_thread(
+                            log.write,
+                            Text(
+                                "(showing inline diffs for the first 10 changed files only)",
+                                style="dim",
+                            ),
+                        )
+                        self.app.call_from_thread(log.write, Text(""))
+
                 shown = 0
                 for rel in only_repo:
                     if shown >= 60:
@@ -335,12 +381,7 @@ class FileScreen(Screen):
                         break
                     self.app.call_from_thread(log.write, Text(f"x {rel}  (a=apply DELETES it)", style="red"))
                     shown += 1
-                for rel in changed:
-                    if shown >= 60:
-                        break
-                    self.app.call_from_thread(log.write, Text(f"~ {rel}  (content differs)", style="yellow"))
-                    shown += 1
-                total = len(only_repo) + len(only_sys) + len(changed)
+                total = len(only_repo) + len(only_sys)
                 if total > shown:
                     self.app.call_from_thread(log.write, Text(f"... and {total - shown} more", style="dim"))
         elif repo_file.is_dir() or sys_file.is_dir():
