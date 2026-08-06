@@ -30,6 +30,27 @@ def tmp_config(tmp_path: Path) -> Path:
     return base
 
 
+@pytest.fixture
+def tmp_config_many_packages(tmp_path: Path) -> Path:
+    """Same shape as tmp_config, but with enough packages that PageDown
+    visibly moves the cursor by more than one row."""
+    base = tmp_path / "toolTamer"
+    configs = base / "configs"
+    common = configs / "common"
+    common.mkdir(parents=True)
+    (common / "files").mkdir()
+    pkgs = "\n".join(f"pkg{i:02d}" for i in range(30))
+    (common / "to_install.brew").write_text(pkgs + "\n")
+    (common / "files.conf").write_text("")
+    host = configs / "testhost"
+    host.mkdir(parents=True)
+    (host / "files").mkdir()
+    (host / "files.conf").write_text("")
+    (host / "includes.conf").write_text("")
+    (base / "tt.conf").write_text("")
+    return base
+
+
 class _HarnessApp(App):
     """Minimal app whose only job is to host a PackageScreen for the test."""
 
@@ -121,3 +142,65 @@ async def test_dep_packages_not_refetched_on_filter_keystroke(tmp_config: Path, 
             await pilot.press("t")
 
             assert len(calls) == 1  # unchanged — no subprocess call per keystroke
+
+
+@pytest.mark.asyncio
+async def test_show_package_info_runs_as_exclusive_worker(tmp_config: Path, monkeypatch):
+    """Regression test: scrolling quickly through the package table spawns
+    one _show_package_info worker per row passed through (RowHighlighted
+    fires once per row). Without exclusive=True, those workers all run
+    concurrently and race to write into the same #pkg-info RichLog."""
+    captured: list[dict] = []
+    original_run_worker = PackageScreen.run_worker
+
+    def fake_run_worker(self, *args, **kwargs):
+        captured.append(kwargs)
+        return original_run_worker(self, *args, **kwargs)
+
+    monkeypatch.setattr(PackageScreen, "run_worker", fake_run_worker)
+    monkeypatch.setattr(SystemInfo, "list_installed_packages", lambda self: ["git", "fzf"])
+    monkeypatch.setattr(SystemInfo, "list_dependency_packages", lambda self: set())
+
+    with patch("socket.gethostname", return_value="testhost"):
+        app = _HarnessApp(TTConfig(tmp_config), SystemInfo())
+        async with app.run_test() as pilot:
+            screen = app.screen
+            assert isinstance(screen, PackageScreen)
+            screen._show_package_info("common", "git")
+            await pilot.pause()
+
+    assert captured, "run_worker was never called"
+    assert captured[0].get("exclusive") is True
+
+
+@pytest.mark.asyncio
+async def test_page_down_and_page_up_work_regardless_of_focus(
+    tmp_config_many_packages: Path, monkeypatch
+):
+    """Regression test: right after the screen mounts, the filter Input
+    holds focus by default (it's first in DOM order). Input doesn't bind
+    pageup/pagedown, so those keys must be handled at the screen level to
+    do anything at all — this is the reported "PgDn/PgUp doesn't work"
+    bug."""
+    monkeypatch.setattr(SystemInfo, "list_installed_packages", lambda self: [])
+    monkeypatch.setattr(SystemInfo, "list_dependency_packages", lambda self: set())
+
+    with patch("socket.gethostname", return_value="testhost"):
+        app = _HarnessApp(TTConfig(tmp_config_many_packages), SystemInfo())
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, PackageScreen)
+            table = screen.query_one("#pkg-table", DataTable)
+            filter_input = screen.query_one("#pkg-filter")
+
+            assert filter_input.has_focus  # default focus, not explicitly moved
+            assert table.row_count > 10  # enough rows for PageDown to matter
+
+            before = table.cursor_row
+            await pilot.press("pagedown")
+            after_down = table.cursor_row
+            assert after_down > before + 1  # moved by more than one row
+
+            await pilot.press("pageup")
+            after_up = table.cursor_row
+            assert after_up < after_down

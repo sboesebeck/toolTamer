@@ -26,6 +26,8 @@ class PackageScreen(Screen):
         ("d", "toggle_hide_deps", "Hide deps"),
         ("slash", "focus_search", "Search"),
         ("tab", "switch_pane", "Switch Pane"),
+        ("pageup", "page_up", "Page up"),
+        ("pagedown", "page_down", "Page down"),
     ]
 
     def __init__(self, tt_config: TTConfig, system: SystemInfo):
@@ -191,7 +193,7 @@ class PackageScreen(Screen):
         config, pkg = key.split(":", 1)
         self._show_package_info(config, pkg)
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def _show_package_info(self, config: str, package: str) -> None:
         info_text = self._system.get_package_info(package)
         log = self.query_one("#pkg-info", RichLog)
@@ -411,3 +413,14 @@ class PackageScreen(Screen):
             self.query_one("#pkg-info", RichLog).focus()
         else:
             self.query_one("#pkg-table", DataTable).focus()
+
+    def action_page_down(self) -> None:
+        """Page the package table down, regardless of which widget
+        currently has focus (the filter Input has focus by default and
+        doesn't bind pageup/pagedown itself)."""
+        self.query_one("#pkg-table", DataTable).action_page_down()
+
+    def action_page_up(self) -> None:
+        """Page the package table up, regardless of which widget currently
+        has focus."""
+        self.query_one("#pkg-table", DataTable).action_page_up()
