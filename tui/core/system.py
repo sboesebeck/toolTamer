@@ -57,6 +57,34 @@ class SystemInfo:
             return []
         return []
 
+    def list_dependency_packages(self) -> set[str]:
+        """Names of installed packages the package manager considers
+        dependency-only installs — not explicitly requested by the user.
+        Empty set on any failure or for an unrecognized installer; this is
+        a display-only lookup and must never raise."""
+        try:
+            if self.installer == "brew":
+                result = subprocess.run(
+                    ["brew", "list", "--no-installed-on-request"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                return {l for l in result.stdout.splitlines() if l.strip()}
+            elif self.installer == "apt":
+                result = subprocess.run(
+                    ["apt-mark", "showauto"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                return {l for l in result.stdout.splitlines() if l.strip()}
+            elif self.installer == "pacman":
+                result = subprocess.run(
+                    ["pacman", "-Qdq"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                return {l for l in result.stdout.splitlines() if l.strip()}
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return set()
+        return set()
+
     def sync_taps(self, taps: list[str]) -> list[str]:
         """Ensure all given brew taps are tapped. Returns list of newly added taps."""
         if self.installer != "brew":
