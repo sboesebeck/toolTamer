@@ -23,6 +23,7 @@ class PackageScreen(Screen):
         ("x", "uninstall_package", "Uninstall"),
         ("r", "remove_from_config", "Remove from Config"),
         ("a", "add_to_config", "Add to Config"),
+        ("d", "toggle_hide_deps", "Hide deps"),
         ("slash", "focus_search", "Search"),
         ("tab", "switch_pane", "Switch Pane"),
     ]
@@ -31,14 +32,16 @@ class PackageScreen(Screen):
         super().__init__()
         self._tt_config = tt_config
         self._system = system
-        self._all_rows: list[tuple[str, str, str, str]] = []  # status, pkg, tag, key
+        self._all_rows: list[tuple[str, str, str, str, bool]] = []  # status, pkg, tag, key, is_dep
+        self._dep_packages: set[str] = set()
+        self._hide_deps: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Container(id="pkg-screen"):
             with Container(id="pkg-list-pane"):
                 yield Label(
-                    "Packages  [dim]OK=installed  !!=missing  ++=extra  --=unknown[/]",
+                    "Packages  [dim]OK=installed  !!=missing  ++=extra  --=unknown  D=dependency[/]",
                     classes="section-title",
                 )
                 yield Input(
@@ -54,7 +57,8 @@ class PackageScreen(Screen):
     def on_mount(self) -> None:
         table = self.query_one("#pkg-table", DataTable)
         table.cursor_type = "row"
-        table.add_columns("St", "Package", "Config")
+        table.add_columns("St", "Package", "Dep", "Config")
+        self._dep_packages = self._safe_dep_packages()
         self._load_packages()
         # Show initial help in info pane
         log = self.query_one("#pkg-info", RichLog)
@@ -67,12 +71,24 @@ class PackageScreen(Screen):
         log.write(Text("  c  Copy package to another config", style="dim"))
         log.write(Text("  r  Remove package from config", style="dim"))
         log.write(Text("  a  Add new package to config", style="dim"))
+        log.write(Text("  d  Toggle hide dependency-only packages", style="dim"))
         log.write(Text("  /  Filter packages", style="dim"))
         log.write(Text("  Esc  Back to dashboard", style="dim"))
 
+    def _safe_dep_packages(self) -> set[str]:
+        """Dependency-only package names, or an empty set on any failure —
+        this is a display-only lookup and must never crash the screen."""
+        try:
+            return self._system.list_dependency_packages()
+        except Exception:
+            return set()
+
     def _refresh_packages(self) -> None:
-        """Reload packages preserving the current filter."""
+        """Reload packages preserving the current filter. Also refreshes
+        the cached dependency set, since installing/uninstalling a package
+        can change which packages are dependency-only."""
         current_filter = self.query_one("#pkg-filter", Input).value
+        self._dep_packages = self._safe_dep_packages()
         self._load_packages(filter_text=current_filter)
 
     def _load_packages(self, filter_text: str = "") -> None:
@@ -106,13 +122,15 @@ class PackageScreen(Screen):
                     tag = "common"
                 else:
                     tag = cfg
-                self._all_rows.append((status, pkg, tag, f"{cfg}:{pkg}"))
+                is_dep = pkg in self._dep_packages
+                self._all_rows.append((status, pkg, tag, f"{cfg}:{pkg}", is_dep))
 
         # Add extra packages (installed but not in any config)
         if installed:
             extras = sorted(installed - effective_set)
             for pkg in extras:
-                self._all_rows.append(("++", pkg, "system", f"_extra_:{pkg}"))
+                is_dep = pkg in self._dep_packages
+                self._all_rows.append(("++", pkg, "system", f"_extra_:{pkg}", is_dep))
 
         # Determine filter mode
         ft = filter_text.strip().lower()
@@ -129,10 +147,12 @@ class PackageScreen(Screen):
         elif ft:
             name_filter = ft
 
-        for status, pkg, tag, key in self._all_rows:
+        for status, pkg, tag, key, is_dep in self._all_rows:
             if status_filter and status != status_filter:
                 continue
             if name_filter and name_filter not in pkg.lower():
+                continue
+            if self._hide_deps and is_dep:
                 continue
 
             st = Text(status)
@@ -155,7 +175,8 @@ class PackageScreen(Screen):
             else:
                 cfg_text.stylize("blue")
 
-            table.add_row(st, Text(pkg), cfg_text, key=key)
+            dep_text = Text("D", style="dim") if is_dep else Text("")
+            table.add_row(st, Text(pkg), dep_text, cfg_text, key=key)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "pkg-filter":
@@ -302,6 +323,10 @@ class PackageScreen(Screen):
     def _on_package_added(self, result: str | None) -> None:
         if result:
             self._refresh_packages()
+
+    def action_toggle_hide_deps(self) -> None:
+        self._hide_deps = not self._hide_deps
+        self._refresh_packages()
 
     @work(thread=True)
     def _run_pkg_action(self, package: str, action: str) -> None:
