@@ -7,6 +7,7 @@ from textual.app import ComposeResult
 from textual.containers import Container, Vertical
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Input, Label, RichLog
+from textual.worker import get_current_worker
 
 from tui.core.config import TTConfig
 from tui.core.system import SystemInfo
@@ -195,7 +196,16 @@ class PackageScreen(Screen):
 
     @work(thread=True, exclusive=True)
     def _show_package_info(self, config: str, package: str) -> None:
+        worker = get_current_worker()
         info_text = self._system.get_package_info(package)
+        if worker.is_cancelled:
+            # A newer row got highlighted while we were still fetching
+            # info for this one — exclusive=True only requests
+            # cancellation of a thread worker, it doesn't stop it, so this
+            # check is what actually prevents a superseded worker from
+            # doing the second (also slow) subprocess call below and then
+            # writing stale info into the shared RichLog.
+            return
         log = self.query_one("#pkg-info", RichLog)
         self.app.call_from_thread(log.clear)
 
@@ -204,6 +214,8 @@ class PackageScreen(Screen):
 
         # Show tap if from a third-party tap
         tap = self._system.get_package_tap(package)
+        if worker.is_cancelled:
+            return
         if tap:
             self.app.call_from_thread(log.write, Text(f"Tap: {tap}", style="dim"))
 

@@ -1,7 +1,7 @@
 """Tests for the Dep column, caching, and hide-toggle in PackageScreen."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from textual.app import App
@@ -204,3 +204,63 @@ async def test_page_down_and_page_up_work_regardless_of_focus(
             await pilot.press("pageup")
             after_up = table.cursor_row
             assert after_up < after_down
+
+
+def _make_package_screen(tmp_config: Path, monkeypatch) -> PackageScreen:
+    with patch("socket.gethostname", return_value="testhost"):
+        screen = PackageScreen(TTConfig(tmp_config), SystemInfo())
+    # Not mounted — app/query_one are mocked directly, since this test
+    # exercises _show_package_info's own cancellation control flow, not
+    # Textual's widget tree. `app` is a read-only property on the base
+    # Widget class, so it's replaced on the class (monkeypatch reverts it
+    # automatically) rather than assigned on the instance.
+    monkeypatch.setattr(PackageScreen, "app", MagicMock())
+    screen.query_one = MagicMock()
+    return screen
+
+
+def test_show_package_info_stops_before_second_subprocess_call_when_cancelled(
+    tmp_config: Path, monkeypatch
+):
+    """Regression test: exclusive=True alone does not stop an in-flight
+    thread worker — Worker.cancel() only sets a flag, it never joins or
+    kills the thread (verified against textual/worker.py). Without an
+    is_cancelled check, a worker superseded by a newer one (e.g. the user
+    already scrolled to the next row) keeps running to completion anyway,
+    including get_package_tap's subprocess call and every RichLog write —
+    this is exactly what produced "every row scrolled past gets displayed,
+    one after another" once the key was released."""
+    screen = _make_package_screen(tmp_config, monkeypatch)
+    fake_worker = MagicMock(is_cancelled=True)
+    monkeypatch.setattr(
+        "tui.screens.packages.get_current_worker", lambda: fake_worker
+    )
+    get_info = MagicMock(return_value="some info")
+    get_tap = MagicMock(return_value=None)
+    monkeypatch.setattr(screen._system, "get_package_info", get_info)
+    monkeypatch.setattr(screen._system, "get_package_tap", get_tap)
+
+    PackageScreen._show_package_info.__wrapped__(screen, "common", "git")
+
+    get_info.assert_called_once()  # first call always happens — no way to
+    # know in advance it'll be stale before making it
+    get_tap.assert_not_called()  # second call skipped once cancelled
+    screen.query_one.assert_not_called()  # RichLog never touched
+    screen.app.call_from_thread.assert_not_called()
+
+
+def test_show_package_info_completes_when_not_cancelled(tmp_config: Path, monkeypatch):
+    screen = _make_package_screen(tmp_config, monkeypatch)
+    fake_worker = MagicMock(is_cancelled=False)
+    monkeypatch.setattr(
+        "tui.screens.packages.get_current_worker", lambda: fake_worker
+    )
+    monkeypatch.setattr(screen._system, "get_package_info", lambda pkg: "some info")
+    monkeypatch.setattr(screen._system, "get_package_tap", lambda pkg: None)
+    monkeypatch.setattr(screen._system, "list_installed_packages", lambda: [])
+
+    PackageScreen._show_package_info.__wrapped__(screen, "common", "git")
+
+    # Sanity check the guard isn't unconditionally skipping everything —
+    # the normal (not cancelled) path still writes to the log.
+    assert screen.app.call_from_thread.call_count > 0
