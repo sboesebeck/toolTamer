@@ -19,8 +19,10 @@ from textual.widgets import (
     RichLog,
 )
 from textual.widgets.option_list import Option
+from textual.worker import get_current_worker
 
 from tui.core.config import TTConfig, dir_diff, tree_hash, tree_signature
+from tui.core.diff_render import render_changed_diffs
 from tui.core.system import SystemInfo
 
 
@@ -212,7 +214,7 @@ class FileScreen(Screen):
         config, stored, target = parts
         self._show_diff(config, stored, target)
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def _show_diff(self, config: str, stored: str, target: str) -> None:
         import subprocess
 
