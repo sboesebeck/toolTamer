@@ -85,6 +85,61 @@ class SystemInfo:
             return set()
         return set()
 
+    def get_required_by(self, package: str) -> list[str]:
+        """Names of currently-installed packages that structurally require
+        `package` right now — a reverse-dependency lookup, distinct from
+        list_dependency_packages()'s install-reason ("auto" vs "manual")
+        check. A package can be "manual" and still be required by another
+        installed package, in which case the package manager will refuse
+        to remove it regardless. Empty list on any failure or for an
+        unrecognized installer; this is a display-only lookup and must
+        never raise or block an uninstall attempt on its own."""
+        try:
+            if self.installer == "brew":
+                result = subprocess.run(
+                    ["brew", "uses", "--installed", package],
+                    capture_output=True, text=True, timeout=15,
+                )
+                return [l.strip() for l in result.stdout.splitlines() if l.strip()]
+            elif self.installer == "apt":
+                # --important restricts this to Depends/Pre-Depends —
+                # without it, apt-cache rdepends also counts Recommends/
+                # Suggests/Conflicts/Breaks/Replaces/Enhances as "reverse
+                # depends", which are common enough on real systems to
+                # make this falsely refuse (or warn about) an uninstall
+                # that would actually be fine.
+                result = subprocess.run(
+                    ["apt-cache", "rdepends", "--installed", "--important", package],
+                    capture_output=True, text=True, timeout=15,
+                )
+                deps = []
+                in_deps = False
+                for line in result.stdout.splitlines():
+                    if line.strip() == "Reverse Depends:":
+                        in_deps = True
+                        continue
+                    if in_deps:
+                        name = line.strip().lstrip("|").strip()
+                        if name:
+                            deps.append(name)
+                return deps
+            elif self.installer == "pacman":
+                result = subprocess.run(
+                    ["pacman", "-Qi", package],
+                    capture_output=True, text=True, timeout=15,
+                )
+                for line in result.stdout.splitlines():
+                    if line.startswith("Required By"):
+                        _, _, value = line.partition(":")
+                        names = value.strip()
+                        if not names or names == "None":
+                            return []
+                        return names.split()
+                return []
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return []
+        return []
+
     def sync_taps(self, taps: list[str]) -> list[str]:
         """Ensure all given brew taps are tapped. Returns list of newly added taps."""
         if self.installer != "brew":

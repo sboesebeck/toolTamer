@@ -122,3 +122,121 @@ def test_list_dependency_packages_empty_stdout_returns_empty_set(monkeypatch):
     monkeypatch.setattr(subprocess, "run", empty)
 
     assert system.list_dependency_packages() == set()
+
+
+# get_required_by() answers a different question than list_dependency_packages():
+# not "was this installed automatically" (install reason) but "does some
+# currently-installed package structurally need this one right now" (reverse
+# dependency). A package can be "manual" (so list_dependency_packages omits it)
+# and still be required by another installed package.
+
+def test_get_required_by_apt(monkeypatch):
+    system = SystemInfo()
+    system.installer = "apt"
+
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["apt-cache", "rdepends", "--installed", "--important", "json-glib"]
+        stdout = (
+            "json-glib\n"
+            "Reverse Depends:\n"
+            "  gnome-control-center\n"
+            "  |some-other-package\n"
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert system.get_required_by("json-glib") == [
+        "gnome-control-center",
+        "some-other-package",
+    ]
+
+
+def test_get_required_by_apt_none(monkeypatch):
+    system = SystemInfo()
+    system.installer = "apt"
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout="pkg\nReverse Depends:\n", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert system.get_required_by("pkg") == []
+
+
+def test_get_required_by_brew(monkeypatch):
+    system = SystemInfo()
+    system.installer = "brew"
+
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["brew", "uses", "--installed", "openssl@3"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="curl\nwget\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert system.get_required_by("openssl@3") == ["curl", "wget"]
+
+
+def test_get_required_by_pacman(monkeypatch):
+    system = SystemInfo()
+    system.installer = "pacman"
+
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["pacman", "-Qi", "glibc"]
+        stdout = "Name            : glibc\nRequired By     : bash  coreutils\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert system.get_required_by("glibc") == ["bash", "coreutils"]
+
+
+def test_get_required_by_pacman_none(monkeypatch):
+    system = SystemInfo()
+    system.installer = "pacman"
+
+    def fake_run(cmd, **kwargs):
+        stdout = "Name            : zlib\nRequired By     : None\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert system.get_required_by("zlib") == []
+
+
+def test_get_required_by_unknown_installer_no_subprocess_call(monkeypatch):
+    system = SystemInfo()
+    system.installer = "unknown"
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("subprocess.run must not be called for an unknown installer")
+
+    monkeypatch.setattr(subprocess, "run", fail_if_called)
+
+    assert system.get_required_by("pkg") == []
+
+
+def test_get_required_by_missing_binary_returns_empty_list(monkeypatch):
+    system = SystemInfo()
+    system.installer = "apt"
+
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("apt-cache not on PATH")
+
+    monkeypatch.setattr(subprocess, "run", missing)
+
+    assert system.get_required_by("pkg") == []
+
+
+def test_get_required_by_timeout_returns_empty_list(monkeypatch):
+    system = SystemInfo()
+    system.installer = "apt"
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["apt-cache"], timeout=15)
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+
+    assert system.get_required_by("pkg") == []
