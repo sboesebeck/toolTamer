@@ -29,13 +29,31 @@ class DestPickerScreen(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, tt_config: TTConfig, system: SystemInfo, source_config: str, package: str, is_move: bool):
+    def __init__(
+        self,
+        tt_config: TTConfig,
+        system: SystemInfo,
+        source_config: str,
+        package: str,
+        is_move: bool,
+        pick_only: bool = False,
+    ):
+        """pick_only=True: just return the picked config via dismiss(),
+        without moving/copying anything here — used for a bulk action where
+        the caller applies the move/copy per package itself. Deliberately a
+        constructor flag rather than a subclass overriding
+        on_option_list_option_selected by name: Textual invokes an
+        on_<message> handler from every class in the MRO that defines one,
+        not only the most-derived override, so such a subclass used to run
+        both the override's dismiss() *and* this method's move_package()
+        for the same selection."""
         super().__init__()
         self._tt_config = tt_config
         self._system = system
         self._source = source_config
         self._package = package
         self._is_move = is_move
+        self._pick_only = pick_only
 
     def compose(self) -> ComposeResult:
         action = "Move" if self._is_move else "Copy"
@@ -65,10 +83,11 @@ class DestPickerScreen(ModalScreen[str | None]):
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         dest = str(event.option.id)
-        if self._is_move:
-            self._tt_config.move_package(self._source, dest, self._package, self._system.installer)
-        else:
-            self._tt_config.copy_package(self._source, dest, self._package, self._system.installer)
+        if not self._pick_only:
+            if self._is_move:
+                self._tt_config.move_package(self._source, dest, self._package, self._system.installer)
+            else:
+                self._tt_config.copy_package(self._source, dest, self._package, self._system.installer)
         self.dismiss(dest)
 
     def action_cancel(self) -> None:

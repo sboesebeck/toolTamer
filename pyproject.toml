@@ -19,3 +19,4 @@ include = ["tui*"]
 
 [project.scripts]
 tt-tui = "tui.app:main"
+tt-cleanup-deps = "tui.cleanup_deps:main"

@@ -1,5 +1,6 @@
 """Status summary widget for the dashboard."""
 
+import concurrent.futures
 import hashlib
 from pathlib import Path
 
@@ -60,43 +61,103 @@ class StatusBar(Widget):
         """Re-run the status scan (call after returning from sub-screens)."""
         self._scan_status()
 
+    @staticmethod
+    def _format_pkg_summary(
+        total_pkgs: int,
+        missing_pkgs: list[str],
+        excess_pkgs: list[str],
+        refining: bool = False,
+    ) -> tuple[str, str]:
+        """Build the (summary, detail) text pair for #pkg-count /
+        #pkg-details. Shared between the fast pass (cheap install-reason
+        signal) and the refined pass (structural check) below, so both
+        render identically apart from the excess list itself and the
+        "refining" suffix."""
+        pkg_text = f"{total_pkgs} managed"
+        if missing_pkgs:
+            pkg_text += f", [red]{len(missing_pkgs)} missing[/]"
+        if excess_pkgs:
+            pkg_text += f", [yellow]{len(excess_pkgs)} extra[/]"
+        if not missing_pkgs and not excess_pkgs:
+            pkg_text += " [green]— all synced[/]"
+        if refining:
+            pkg_text += "  [dim]⏳ refining...[/]"
+
+        pkg_detail_parts = []
+        if missing_pkgs:
+            names = ", ".join(missing_pkgs[:10])
+            if len(missing_pkgs) > 10:
+                names += f" +{len(missing_pkgs) - 10} more"
+            pkg_detail_parts.append(f"[red]Missing:[/] {names}")
+        if excess_pkgs:
+            names = ", ".join(excess_pkgs[:10])
+            if len(excess_pkgs) > 10:
+                names += f" +{len(excess_pkgs) - 10} more"
+            pkg_detail_parts.append(f"[yellow]Extra:[/] {names}")
+        pkg_details = " | ".join(pkg_detail_parts) if pkg_detail_parts else ""
+        return pkg_text, pkg_details
+
+    def _refine_excess_pkgs(self, excess_pkgs: list[str], should_stop=None) -> list[str]:
+        """The cheap list_dependency_packages() signal used for the fast
+        pass can miss real dependencies (the json-glib report) — this
+        re-checks each excess/"extra" package with the same structural
+        get_required_by() check the package screen uses (one subprocess
+        call per package), in parallel since that's the slow part.
+        Returns the subset of excess_pkgs still genuinely unaccounted for
+        once the structural check is in. Mirrors
+        PackageScreen._extra_required_deps."""
+        if not excess_pkgs:
+            return []
+        still_excess: list[str] = []
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+        try:
+            futures = {
+                pool.submit(self._system.get_required_by, pkg): pkg
+                for pkg in excess_pkgs
+            }
+            for future in concurrent.futures.as_completed(futures):
+                pkg = futures[future]
+                try:
+                    required_by = future.result()
+                except Exception:
+                    required_by = []
+                if not required_by:
+                    still_excess.append(pkg)
+                if should_stop is not None and should_stop():
+                    break
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        return sorted(still_excess)
+
     @work(thread=True, exclusive=True)
     def _scan_status(self) -> None:
         worker = get_current_worker()
         host = self._system.hostname
         installer = self._system.installer
 
-        # Package scan
+        # Package scan — fast pass first (cheap install-reason signal),
+        # refined in the background further down, after the file scan is
+        # already shown, with the same structural check the package
+        # screen uses (see _refine_excess_pkgs).
         effective = self._tt_config.get_effective_packages(host, installer)
         effective_set = set(effective)
         total_pkgs = len(effective)
+        missing_pkgs: list[str] = []
+        excess_pkgs: list[str] = []
         try:
             installed = set(self._system.list_installed_packages())
+            try:
+                dep_only = set(self._system.list_dependency_packages())
+            except Exception:
+                dep_only = set()
             missing_pkgs = sorted(p for p in effective if p not in installed)
-            excess_pkgs = sorted(p for p in installed if p not in effective_set)
-
-            pkg_text = f"{total_pkgs} managed"
-            if missing_pkgs:
-                pkg_text += f", [red]{len(missing_pkgs)} missing[/]"
-            if excess_pkgs:
-                pkg_text += f", [yellow]{len(excess_pkgs)} extra[/]"
-            if not missing_pkgs and not excess_pkgs:
-                pkg_text += " [green]— all synced[/]"
-
-            # Build detail lines
-            pkg_detail_parts = []
-            if missing_pkgs:
-                names = ", ".join(missing_pkgs[:10])
-                if len(missing_pkgs) > 10:
-                    names += f" +{len(missing_pkgs) - 10} more"
-                pkg_detail_parts.append(f"[red]Missing:[/] {names}")
-            if excess_pkgs:
-                names = ", ".join(excess_pkgs[:10])
-                if len(excess_pkgs) > 10:
-                    names += f" +{len(excess_pkgs) - 10} more"
-                pkg_detail_parts.append(f"[yellow]Extra:[/] {names}")
-            pkg_details = " | ".join(pkg_detail_parts) if pkg_detail_parts else ""
-
+            excess_pkgs = sorted(
+                p for p in installed
+                if p not in effective_set and p not in dep_only
+            )
+            pkg_text, pkg_details = self._format_pkg_summary(
+                total_pkgs, missing_pkgs, excess_pkgs, refining=bool(excess_pkgs)
+            )
         except Exception:
             pkg_text = f"{total_pkgs} managed"
             pkg_details = ""
@@ -169,3 +230,21 @@ class StatusBar(Widget):
         self.app.call_from_thread(
             self.query_one("#file-details", Label).update, file_details
         )
+
+        # Refine the "extra" package count now that the fast numbers are
+        # already on screen — see _refine_excess_pkgs.
+        if excess_pkgs:
+            refined_excess = self._refine_excess_pkgs(
+                excess_pkgs, should_stop=lambda: worker.is_cancelled
+            )
+            if worker.is_cancelled:
+                return
+            pkg_text, pkg_details = self._format_pkg_summary(
+                total_pkgs, missing_pkgs, refined_excess
+            )
+            self.app.call_from_thread(
+                self.query_one("#pkg-count", Label).update, pkg_text
+            )
+            self.app.call_from_thread(
+                self.query_one("#pkg-details", Label).update, pkg_details
+            )
