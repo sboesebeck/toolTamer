@@ -361,27 +361,38 @@ function syncInstall() {
       continue
     fi
     if ! grep "$l" $TMP/to_install.sorted >/dev/null 2>&1; then
-      if [[ "$l" =~ "lib" ]]; then
-        logn "${YL}L$RESET"
-        logf "Assuming $l is a lib - not uninstalling"
+      # No more "name contains 'lib'" guess — it both missed real
+      # dependencies whose name doesn't happen to contain "lib" and kept
+      # genuinely unwanted packages that did. $USES (see checkSystem in
+      # include.sh) now gives an accurate, installer-specific reverse-
+      # dependency check for every package uniformly.
+      U=$(echo "$USES" | sed -e "s/%%/$l/g")
+      deps=$(bash -c "$U" | wc -w)
+      if [ "$deps" -gt 0 ]; then
+        # Not persisted to to_install.$INSTALLER — $USES re-derives this
+        # fresh on every run, so writing it into the config would only
+        # freeze today's dependency as a permanent, host-specific entry
+        # that never gets re-evaluated again and outlives whatever
+        # actually needed it. It's also the wrong config to freeze it
+        # into: the package that needs $l might live in "common" or a
+        # shared config, not $HOST specifically.
+        logn "${YL}D$RESET"
+        logf "$l is dependency of $deps packages - not removing"
+        note "Kept as dependency" "$l"
+      elif [ -z "$UNINSTALL" ]; then
+        # pacman has no UNINSTALL set (uninstalling isn't supported there
+        # yet) — without this guard, "$UNINSTALL $l" with UNINSTALL empty
+        # would run "$l" itself as a command instead of uninstalling it.
+        logn "${YL}?$RESET"
+        logf "Would remove $l, but uninstalling isn't supported for $INSTALLER — leaving it"
       else
-        U=$(echo "$USES" | sed -e "s/%%/$l/g")
-        deps=$(bash -c "$U" | wc -w)
-        if [ "$deps" -gt 0 ]; then
-          logn "${YL}D$RESET"
-          logf "$l is dependency of $deps packages"
-          logf "adding $l to install list for $HOST"
-          echo "$l" >>$BASE/configs/$HOST/to_install.$INSTALLER
-          note "Kept as dependency (added to install list)" "$l"
+        logn "${RD}R${RESET}"
+        logf "Removing ${RD}$l$RESET from system - is not in list"
+        if $UNINSTALL $l; then
+          note "Removed package" "$l"
         else
-          logn "${RD}R${RESET}"
-          logf "Removing ${RD}$l$RESET from system - is not in list"
-          if $UNINSTALL $l; then
-            note "Removed package" "$l"
-          else
-            err "Uninstall of $l failed"
-            note "Failed to remove package" "$l"
-          fi
+          err "Uninstall of $l failed"
+          note "Failed to remove package" "$l"
         fi
       fi
     else

@@ -275,12 +275,17 @@ function checkSystem() {
       INSTALL="sudo apt install -y"
       UNINSTALL="sudo apt purge -y"
       UPDATE="sudo apt-get update && sudo apt-get upgrade -y"
-      if hash apt-rdepends; then
-        USES="apt-rdepends -r %% 2>/dev/null | grep Reverse"
-      else
-        log "${YL}Warning:$RESET cannot determine dependencies, consider installing apt-rdepends."
-        USES="echo 'no dependencies'"
-      fi
+      # apt-cache ships with apt itself (unlike the optional apt-rdepends),
+      # so this never silently degrades to "no dependencies" the way the
+      # old apt-rdepends-or-nothing check did. --installed restricts the
+      # reverse-dependency list to packages that are actually installed
+      # right now, matching what syncInstall() needs: "would removing $l
+      # break something on THIS system", not "could it in theory".
+      # --important limits it to Depends/Pre-Depends, excluding Recommends/
+      # Suggests/Conflicts/Breaks/Replaces/Enhances — without it, common
+      # Recommends relationships would make this keep packages that would
+      # actually be fine to remove.
+      USES="apt-cache rdepends --installed --important %% 2>/dev/null | awk '/Reverse Depends:/{f=1;next} f && NF'"
       LIST="apt list --installed | grep -v Listing... |/usr/bin/cut -f1 -d/"
 
     }
@@ -289,7 +294,15 @@ function checkSystem() {
       INSTALLER="pacman"
       INSTALL="sudo pacman -Sy --noconfirm"
       UPDATE="sudo pacman -Syu --noconfirm"
-      USES='pacman -Qi %% | grep "Required By " | grep -v None |tr " " "\n"| wc -l'
+      # Emit the actual dependent names (like the apt/brew branches above),
+      # not a pre-counted number — bin/tt's syncInstall() pipes $USES's
+      # output through `wc -w` itself. The old "...| wc -l" here produced
+      # a single-line number, and counting the WORDS of that number with
+      # wc -w always came out to 1 regardless of whether it was "0" or
+      # "7" — so every pacman package looked like a dependency and was
+      # never actually removed (masked, harmlessly, by UNINSTALL being
+      # unset for pacman below — see the guard in syncInstall()).
+      USES='pacman -Qi %% | sed -n "s/^Required By *: //p" | grep -vx None | tr " " "\n" | grep -v "^$"'
       LIST="pacman -Q | awk '{print \$1}'"
     }
     if [ -z $INSTALLER ]; then
