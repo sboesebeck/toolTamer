@@ -154,6 +154,12 @@ def _run_main(
     system = _system(monkeypatch, required_by_map, dep_only=dep_only)
     monkeypatch.setattr("tui.cleanup_deps.SystemInfo", lambda: system)
     monkeypatch.setattr("tui.cleanup_deps.TTConfig", lambda base: TTConfig(tmp_config))
+    # TT_BASE must point at the temp config too, not just TTConfig: main()
+    # also derives the dependency cache path from it. Without this the
+    # tests read and write the *real* ~/.config/toolTamer cache — which
+    # both leaks fake test data into the user's cache and lets results
+    # bleed between tests (caught exactly that way).
+    monkeypatch.setenv("TT_BASE", str(tmp_config))
     if input_answer is not None:
         monkeypatch.setattr("builtins.input", lambda prompt="": input_answer)
     return main(argv)

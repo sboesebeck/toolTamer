@@ -1,6 +1,5 @@
 """Status summary widget for the dashboard."""
 
-import concurrent.futures
 import hashlib
 from pathlib import Path
 
@@ -12,6 +11,7 @@ from textual.widgets import Label
 from textual.worker import get_current_worker
 
 from tui.core.config import TTConfig, tree_hash
+from tui.core.dep_cache import DependencyResolver, default_cache_path
 from tui.core.system import SystemInfo
 
 
@@ -27,6 +27,10 @@ class StatusBar(Widget):
         super().__init__(**kwargs)
         self._tt_config = tt_config
         self._system = system
+        # Same on-disk cache the package screen and tt-cleanup-deps use.
+        self._deps = DependencyResolver(
+            system, default_cache_path(tt_config.base)
+        )
 
     def compose(self) -> ComposeResult:
         with Horizontal():
@@ -97,37 +101,23 @@ class StatusBar(Widget):
         pkg_details = " | ".join(pkg_detail_parts) if pkg_detail_parts else ""
         return pkg_text, pkg_details
 
-    def _refine_excess_pkgs(self, excess_pkgs: list[str], should_stop=None) -> list[str]:
+    def _refine_excess_pkgs(
+        self, excess_pkgs: list[str], installed: list[str], should_stop=None
+    ) -> list[str]:
         """The cheap list_dependency_packages() signal used for the fast
         pass can miss real dependencies (the json-glib report) — this
         re-checks each excess/"extra" package with the same structural
-        get_required_by() check the package screen uses (one subprocess
-        call per package), in parallel since that's the slow part.
-        Returns the subset of excess_pkgs still genuinely unaccounted for
-        once the structural check is in. Mirrors
-        PackageScreen._extra_required_deps."""
+        get_required_by() check the package screen uses. Returns the
+        subset of excess_pkgs still genuinely unaccounted for once that's
+        in. Shares the on-disk cache (and its parallel cold-cache path)
+        with the package screen and tt-cleanup-deps, so on a warm cache
+        this costs nothing and the dashboard number is exact."""
         if not excess_pkgs:
             return []
-        still_excess: list[str] = []
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
-        try:
-            futures = {
-                pool.submit(self._system.get_required_by, pkg): pkg
-                for pkg in excess_pkgs
-            }
-            for future in concurrent.futures.as_completed(futures):
-                pkg = futures[future]
-                try:
-                    required_by = future.result()
-                except Exception:
-                    required_by = []
-                if not required_by:
-                    still_excess.append(pkg)
-                if should_stop is not None and should_stop():
-                    break
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
-        return sorted(still_excess)
+        resolved = self._deps.resolve(
+            excess_pkgs, installed=installed, should_stop=should_stop
+        )
+        return sorted(p for p in excess_pkgs if not resolved.get(p))
 
     @work(thread=True, exclusive=True)
     def _scan_status(self) -> None:
@@ -144,8 +134,10 @@ class StatusBar(Widget):
         total_pkgs = len(effective)
         missing_pkgs: list[str] = []
         excess_pkgs: list[str] = []
+        installed_list: list[str] = []
         try:
-            installed = set(self._system.list_installed_packages())
+            installed_list = self._system.list_installed_packages()
+            installed = set(installed_list)
             try:
                 dep_only = set(self._system.list_dependency_packages())
             except Exception:
@@ -235,7 +227,9 @@ class StatusBar(Widget):
         # already on screen — see _refine_excess_pkgs.
         if excess_pkgs:
             refined_excess = self._refine_excess_pkgs(
-                excess_pkgs, should_stop=lambda: worker.is_cancelled
+                excess_pkgs,
+                installed=installed_list,
+                should_stop=lambda: worker.is_cancelled,
             )
             if worker.is_cancelled:
                 return

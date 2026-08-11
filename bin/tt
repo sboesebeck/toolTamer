@@ -350,6 +350,7 @@ function syncInstall() {
   log "now: running through all localy installed software"
   logn "Checking: "
   bash -c "$LIST" >$TMP/local_installed
+  loadDepCache
   cat $TMP/local_installed | while read l; do
     if [ -z "$l" ]; then
       continue
@@ -366,8 +367,7 @@ function syncInstall() {
       # genuinely unwanted packages that did. $USES (see checkSystem in
       # include.sh) now gives an accurate, installer-specific reverse-
       # dependency check for every package uniformly.
-      U=$(echo "$USES" | sed -e "s/%%/$l/g")
-      deps=$(bash -c "$U" | wc -w)
+      deps=$(depCount "$l")
       if [ "$deps" -gt 0 ]; then
         # Not persisted to to_install.$INSTALLER — $USES re-derives this
         # fresh on every run, so writing it into the config would only

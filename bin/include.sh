@@ -247,6 +247,62 @@ function getInstalledPackages() {
   bash -c "$LIST" >$2
 }
 
+# --- reverse-dependency cache (shared with the Python TUI) ------------
+#
+# $USES is one package-manager call per package and slow enough (~1.3s
+# each for brew) that a sync run over a few hundred packages takes
+# minutes. The TUI and tt-cleanup-deps cache those answers in
+# $BASE/cache/reverse-deps.tsv; this reads the same file so a sync gets
+# the same speedup. See tui/core/dep_cache.py for the format.
+#
+# The cache is only used when its fingerprint matches the currently
+# installed package set — otherwise (or if it's missing entirely) every
+# lookup falls back to $USES, i.e. exactly the old behaviour. Nothing
+# here ever writes the cache; the Python side owns that.
+
+DEP_CACHE_FILE=""
+
+function loadDepCache() {
+  DEP_CACHE_FILE=""
+  local cache="$BASE/cache/reverse-deps.tsv"
+  [ -r "$cache" ] || return 0
+
+  # Must match tui.core.dep_cache.fingerprint(): deduped, bytewise
+  # sorted, newline-separated AND newline-terminated.
+  local current stored
+  current=$(sed '/^$/d' "$TMP/local_installed" | LC_ALL=C sort -u |
+    shasum -a 256 2>/dev/null | cut -d' ' -f1)
+  stored=$(grep '^# fingerprint ' "$cache" 2>/dev/null | head -1 | cut -d' ' -f3)
+
+  if [ -n "$current" ] && [ "$current" = "$stored" ]; then
+    DEP_CACHE_FILE="$cache"
+    log "${GN}using cached dependency data$RESET"
+  else
+    log "${YL}dependency cache stale or missing - falling back to live lookups$RESET"
+  fi
+}
+
+# Number of installed packages that require $1. Served from the cache
+# when it's valid and has an entry for this package, otherwise via $USES.
+function depCount() {
+  local pkg="$1"
+  if [ -n "$DEP_CACHE_FILE" ]; then
+    local line
+    line=$(grep -F "$(printf '%s\t' "$pkg")" "$DEP_CACHE_FILE" 2>/dev/null |
+      awk -F'\t' -v P="$pkg" '$1==P {print $2; exit}')
+    # A cached package with no dependents yields an empty field, which is
+    # a real answer ("nothing needs it") - distinguish that from "not in
+    # the cache at all" by checking for the record, not the value.
+    if grep -q -F "$(printf '%s\t' "$pkg")" "$DEP_CACHE_FILE" 2>/dev/null; then
+      echo "$line" | wc -w
+      return 0
+    fi
+  fi
+  local u
+  u=$(echo "$USES" | sed -e "s/%%/$pkg/g")
+  bash -c "$u" | wc -w
+}
+
 function checkSystem() {
 
   OS_TYPE="$(uname -s)"

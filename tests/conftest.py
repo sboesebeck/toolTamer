@@ -2,6 +2,20 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _never_touch_the_real_config(tmp_path: Path, monkeypatch):
+    """Point TT_BASE at a throwaway dir for every test.
+
+    Anything deriving a path from TT_BASE (currently the dependency cache
+    in tui/core/dep_cache.py) would otherwise fall back to the real
+    ~/.config/toolTamer — a test run then writes fake data into the
+    user's actual cache and results bleed between tests. Tests that need
+    a populated config still override TT_BASE with their own tmp_config;
+    this only guarantees the default is never the real thing.
+    """
+    monkeypatch.setenv("TT_BASE", str(tmp_path / "tt-base-guard"))
+
+
 @pytest.fixture
 def tmp_config(tmp_path: Path) -> Path:
     """Create a minimal ToolTamer config structure for testing."""
