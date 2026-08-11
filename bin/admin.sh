@@ -1656,86 +1656,12 @@ function move_files_between_configs() {
   pause_admin
 }
 
-# When sourced with TT_SOURCE_ONLY=1, only define functions — skip admin menu.
-[ "${TT_SOURCE_ONLY:-}" = "1" ] && return 0
 
-TMP=/tmp/tt$$
-if [ ! -e $TMP ]; then
-  mkdir $TMP
-fi
-touch $TMP/log
-cd $BASE || exit 1
-
-HOST=$(hostname)
-if [ ! -e $BASE/configs/$HOST ]; then
-  err "No config for $HOST - start tt"
-  exit 0
-fi
-
-log "----> ${BL}Tool${YL}Tamer$RESET V1.0 <----"
-
-if ! hash fzf; then
-  err "FZF needs to be installed"
-  exit 1
-fi
-PS3="Choose an option-> "
-
-while true; do
-  if ! o=$(menu "---> ToolTamer Admin Menu <---" "Move ${BL}l${RESET}ocal file to ${BL}ToolTamer$RESET" "Move files between configs in ${BL}ToolTamer$RESET" "View ${BL}d${RESET}ifferences of files" "View differences of ${BL}i${RESET}nstalled tools" "Show ${BL}C${RESET}onfig" "${BL}F${RESET}ix duplicate packages" "${BL}G${RESET}it view" "Add ${BL}P${RESET}ackage to installation" "M${BL}o${RESET}ve installed package" "${BL}H${RESET}ierarchy package actions (move/copy)" "${YL}return$RESET (${BL}q${RESET}/${BL}r$RESET)"); then
-    log "Leaving admin menu."
-    break
-  fi
-  if [ -z "$o" ]; then
-    log "Leaving admin menu."
-    break
-  fi
-  log "Option: $o"
-  n=${o%%:*}
-  o=${o##*:}
-  log "Got option ${YL}$o$RESET (number $n)"
-  case "$n" in
-  "1" | "L" | "l")
-    add_local_file_to_tooltamer
-    ;;
-  "2" | "m")
-    move_files_between_configs
-    ;;
-  "3" | "d" | "D")
-    reviewManagedFileDiffs
-    ;;
-  "4" | "i" | "I")
-    show_package_diff_viewer
-    pause_admin
-    ;;
-  "5" | "c" | "C")
-    showConfig
-    pause_admin
-    ;;
-  "6" | "F" | "f")
-    fixDuplicates
-    pause_admin
-    ;;
-  "7" | "g" | "G")
-    {
-      cd $BASE/
-      lazygit
-    }
-    pause_admin
-    ;;
-  "8" | "p")
-    addPackage
-    pause_admin
-    ;;
-  "9" | "o")
-    movePackage
-    pause_admin
-    ;;
-  "10" | "h" | "H")
-    promote_or_copy_package_hierarchy
-    pause_admin
-    ;;
-  "11" | "q" | "Q" | "r")
-    return
-    ;;
-  esac
-done
+# This file is a library of helper functions, sourced by bin/tt.
+#
+# It used to end with an interactive admin menu here. That menu was only
+# ever reached via `launch_tui || source admin.sh`, i.e. when the Textual
+# TUI could not start — and it was long out of date with what the TUI
+# does. It has been removed; `tt` now requires Python 3.12+ for its
+# interface. The functions above stay: `handle_add_command` backs
+# `tt --add`, and the rest is still useful from a shell.
