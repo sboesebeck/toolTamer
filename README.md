@@ -99,6 +99,10 @@ With Python 3.12+ available, plain `tt` opens a full-screen TUI (`tt` sets up
 its own virtualenv on first use). It shows a dashboard with what's out of
 sync, and screens for packages and files:
 
+![The ToolTamer dashboard](docs/img/dashboard.svg)
+
+![The package manager screen](docs/img/packages.svg)
+
 - **Packages** — every package with its status (`OK` installed, `!!` missing,
   `++` installed but untracked, `D` a dependency of something else). Install
   and uninstall inline, move packages between configs, and mark rows with
