@@ -209,3 +209,50 @@ def test_scan_status_refinement_skipped_when_nothing_is_excess(
 
     required_by.assert_not_called()
     assert len(_pkg_count_texts(status_bar)) == 1  # just the one, non-refining pass
+
+
+def test_tap_qualified_entries_are_not_counted_missing_or_extra(
+    tmp_path: Path, monkeypatch
+):
+    """Regression: the config names a tap package fully qualified
+    (forketyfork/tap/clawtunes) while brew lists it short (clawtunes).
+    Comparing naively counted it BOTH as missing (it's in the config but
+    "not installed") and as extra (installed but "not in any config")."""
+    base = tmp_path / "toolTamer"
+    common = base / "configs" / "common"
+    common.mkdir(parents=True)
+    (common / "files").mkdir()
+    (common / "to_install.brew").write_text("git\nforketyfork/tap/clawtunes\n")
+    (common / "files.conf").write_text("")
+    host = base / "configs" / "testhost"
+    host.mkdir(parents=True)
+    (host / "files").mkdir()
+    (host / "files.conf").write_text("")
+    (host / "includes.conf").write_text("")
+    (base / "tt.conf").write_text("")
+
+    monkeypatch.setattr("socket.gethostname", lambda: "testhost")
+    system = SystemInfo()
+    monkeypatch.setattr(
+        system, "list_installed_packages", lambda: ["git", "clawtunes"]
+    )
+    monkeypatch.setattr(system, "list_dependency_packages", lambda: set())
+    monkeypatch.setattr(system, "get_required_by", lambda pkg: [])
+
+    status_bar = StatusBar(TTConfig(base), system)
+    monkeypatch.setattr(StatusBar, "app", MagicMock())
+    labels: dict[str, MagicMock] = {}
+    status_bar.query_one = MagicMock(
+        side_effect=lambda sel, *a, **kw: labels.setdefault(sel, MagicMock())
+    )
+    monkeypatch.setattr(
+        "tui.widgets.status_bar.get_current_worker",
+        lambda: MagicMock(is_cancelled=False),
+    )
+
+    StatusBar._scan_status.__wrapped__(status_bar)
+
+    text = _pkg_count_text(status_bar)
+    assert "missing" not in text, text
+    assert "extra" not in text, text
+    assert "all synced" in text, text

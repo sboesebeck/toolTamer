@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 from tui.core.config import TTConfig
+from tui.core.pkg_names import installed_index, is_installed
 from tui.core.system import SystemInfo
 
 
@@ -39,14 +40,14 @@ def find_short_tap_names(
     full_names = system.list_package_full_names()
     if not full_names:
         return []
-    installed = set(system.list_installed_packages())
+    installed_idx = installed_index(system.list_installed_packages())
 
     found: list[tuple[str, str, str]] = []
     for cfg in tt_config.resolve_chain(system.hostname):
         for pkg in sorted(tt_config.get_packages(cfg, system.installer)):
             if "/" in pkg:
                 continue  # already qualified
-            if pkg not in installed:
+            if not is_installed(pkg, installed_idx):
                 continue  # can't determine its tap from here
             full = full_names.get(pkg)
             if full:
