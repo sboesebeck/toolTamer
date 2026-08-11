@@ -1,0 +1,49 @@
+name: Deploy documentation
+
+# The docs previously only went live when someone remembered to run
+# `mkdocs gh-deploy` by hand, which is how the published site ended up
+# months behind the repository. This builds and deploys on every change
+# to the documentation instead.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch: # allow a manual redeploy without changing anything
+
+permissions:
+  contents: write # mkdocs gh-deploy pushes the built site to gh-pages
+
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false # never interrupt a deploy midway
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gh-deploy needs the gh-pages branch history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Upper bound on purpose: MkDocs 2.0 is a breaking release, and an
+      # unpinned install would silently start failing (or, worse, publish
+      # something broken) the day it lands. Raise this deliberately.
+      - run: pip install "mkdocs-material>=9,<10"
+
+      # --strict turns warnings (broken links, bad config) into failures,
+      # so a broken build is caught here rather than published.
+      - run: mkdocs build --strict
+
+      - name: Deploy to gh-pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdocs gh-deploy --force
