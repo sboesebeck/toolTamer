@@ -62,11 +62,11 @@ It comes as a Bash sync engine (`bin/`) plus an interactive TUI and helper tools
 1. **Clone the ToolTamer Repository**:
 
    ```bash
-   git clone https://github.com/yourusername/tooltamer.git
+   git clone https://github.com/sboesebeck/toolTamer.git ~/toolTamer
    ```
 2. Navigate there 
 ```
-cd tooltamer
+cd ~/toolTamer
 ```
 3. start the script 
 ```
