@@ -361,13 +361,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-main-menu" class="md-nav__link">
+  <a href="#the-interface" class="md-nav__link">
     <span class="md-ellipsis">
-      The Main Menu
+      The Interface
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="The Main Menu">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-classic-menu" class="md-nav__link">
+    <span class="md-ellipsis">
+      The Classic Menu
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Classic Menu">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -399,6 +408,15 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      Command line
+    </span>
+  </a>
   
 </li>
       
@@ -499,13 +517,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-main-menu" class="md-nav__link">
+  <a href="#the-interface" class="md-nav__link">
     <span class="md-ellipsis">
-      The Main Menu
+      The Interface
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="The Main Menu">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-classic-menu" class="md-nav__link">
+    <span class="md-ellipsis">
+      The Classic Menu
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Classic Menu">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -537,6 +564,15 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      Command line
+    </span>
+  </a>
   
 </li>
       
@@ -579,8 +615,25 @@
 <li><strong>Press Enter</strong> — ToolTamer creates a default structure locally in <code>~/.config/toolTamer/</code>.</li>
 </ul>
 <p>If you create a fresh config, ToolTamer will offer to seed it with common config files (like <code>.zshrc</code>, <code>.bashrc</code>, etc.) based on what exists in your home directory.</p>
-<h2 id="the-main-menu">The Main Menu<a class="headerlink" href="#the-main-menu" title="Permanent link">&para;</a></h2>
-<p>After the optional Git pull, you'll see:</p>
+<h2 id="the-interface">The Interface<a class="headerlink" href="#the-interface" title="Permanent link">&para;</a></h2>
+<p>With <strong>Python 3.12+</strong> available, <code>tt</code> opens a full-screen TUI (it sets up its
+own virtualenv the first time, which takes a moment). The dashboard shows what
+is out of sync, and from there you reach:</p>
+<ul>
+<li><strong>Packages</strong> — every package with its status: <code>OK</code> installed, <code>!!</code> missing,
+  <code>++</code> installed but in no config, <code>D</code> needed by something else. Install and
+  uninstall inline, move packages between configs, or mark several rows with
+  <code>Space</code> and act on all of them at once. Uninstalls are checked against the
+  real dependency graph first, so removing something another package needs is
+  refused rather than attempted.</li>
+<li><strong>Files</strong> — tracked files with a diff against what's on disk, and a per-file
+  choice of which version wins.</li>
+</ul>
+<p>Everything below is also available from the command line — see
+<a href="#command-line">Command line</a>.</p>
+<h2 id="the-classic-menu">The Classic Menu<a class="headerlink" href="#the-classic-menu" title="Permanent link">&para;</a></h2>
+<p>Without a suitable Python, <code>tt</code> falls back to the text menu (also reachable
+via <code>tt --admin</code>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>-----&gt; ToolTamer V1.0 - main menu
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>1. Update System - full system update, local files, installation, local install script
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>2. Files only - update only files
@@ -605,6 +658,21 @@
 <li>Copies current versions of configured files into ToolTamer</li>
 </ul>
 <p>This is useful when you've set up a new machine manually and want to capture that state.</p>
+<h2 id="command-line">Command line<a class="headerlink" href="#command-line" title="Permanent link">&para;</a></h2>
+<p>Everything can be driven without the interactive interface:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>tt<span class="w">                    </span><span class="c1"># interactive TUI (classic menu as fallback)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>tt<span class="w"> </span>--syncSys<span class="w">          </span><span class="c1"># full sync: packages, files, local_install.sh</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>tt<span class="w"> </span>--syncFilesOnly<span class="w">    </span><span class="c1"># only files</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>tt<span class="w"> </span>--updateToolTamer<span class="w">  </span><span class="c1"># snapshot installed packages into the config</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>tt<span class="w"> </span>--admin<span class="w">            </span><span class="c1"># admin menu</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>tt<span class="w"> </span>--fix-taps<span class="w">         </span><span class="c1"># qualify third-party-tap package names</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>tt<span class="w"> </span>--cleanup-deps<span class="w">     </span><span class="c1"># drop packages only listed because something depends on them</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>tt<span class="w"> </span>-h
+</code></pre></div>
+<p><code>--fix-taps</code> and <code>--cleanup-deps</code> only report what they would do; add
+<code>--apply</code> to change your config, which asks for confirmation first. Both pass
+any further arguments through, so <code>tt --fix-taps --help</code> shows their own
+options.</p>
 <h2 id="typical-workflow">Typical Workflow<a class="headerlink" href="#typical-workflow" title="Permanent link">&para;</a></h2>
 <ol>
 <li>

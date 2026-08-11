@@ -452,6 +452,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#generated-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      Generated files
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#global-settings" class="md-nav__link">
     <span class="md-ellipsis">
       Global Settings
@@ -595,6 +604,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#generated-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      Generated files
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#global-settings" class="md-nav__link">
     <span class="md-ellipsis">
       Global Settings
@@ -668,6 +686,25 @@
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>python3
 </code></pre></div>
 <p>ToolTamer ensures <strong>exactly</strong> these packages are installed. Packages present on the system but <strong>not</strong> in any config file will be offered for removal (dependencies are preserved).</p>
+<div class="admonition tip">
+<p class="admonition-title">Packages from third-party taps need their full name</p>
+<p>List a tapped Homebrew package fully qualified —
+<code>forketyfork/tap/clawtunes</code>, not <code>clawtunes</code>. The short name only
+resolves on a machine where that tap has already been added, so it makes
+the package uninstallable on a fresh host; <code>brew install user/repo/formula</code>
+adds the tap by itself. Adding a package through the TUI does this
+automatically, and <code>tt --fix-taps</code> fixes existing entries.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">What counts as a dependency</p>
+<p>A package is kept when another <em>installed</em> package actually requires it —
+ToolTamer asks the package manager, it does not guess from the name. That
+answer is cached per machine (see <code>cache/</code> below), so only the first run
+after installing or removing something pays for the lookup.</p>
+<p>Note this is a different question from "was it installed automatically".
+A package you installed by hand can still be required by something else,
+and is then kept.</p>
+</div>
 <h3 id="filesconf"><code>files.conf</code><a class="headerlink" href="#filesconf" title="Permanent link">&para;</a></h3>
 <p>Maps files in the <code>files/</code> subdirectory to their target location relative to <code>$HOME</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a># Format: filename:target_relative_to_home
@@ -692,6 +729,16 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>homebrew/cask-fonts
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>hashicorp/tap
 </code></pre></div>
+<p>These are added before packages are installed. Note that a package listed
+under its fully qualified name (<code>hashicorp/tap/terraform</code>) does not need an
+entry here — brew adds the tap on its own — but listing taps is still useful
+for casks and for taps you want present regardless.</p>
+<h2 id="generated-files">Generated files<a class="headerlink" href="#generated-files" title="Permanent link">&para;</a></h2>
+<p>Next to <code>configs/</code> there is a <code>cache/</code> directory holding machine-local data,
+currently the reverse-dependency lookups that keep repeated runs fast. It is
+regenerated automatically whenever your installed packages change.</p>
+<p>Add <code>cache/</code> to your config repo's <code>.gitignore</code> — it is specific to one
+machine and has no business being shared.</p>
 <h2 id="global-settings">Global Settings<a class="headerlink" href="#global-settings" title="Permanent link">&para;</a></h2>
 <p>ToolTamer's own settings are in <code>~/.config/toolTamer/tt.conf</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">GIT_AUTO_UPDATE</span><span class="o">=</span>ask<span class="w">    </span><span class="c1"># true | false | ask — auto git-pull on start</span>

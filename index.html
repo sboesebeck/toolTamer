@@ -520,7 +520,7 @@
 
 <h1 id="tooltamer">ToolTamer<a class="headerlink" href="#tooltamer" title="Permanent link">&para;</a></h1>
 <p><strong>Cross-platform system configuration and package synchronization.</strong></p>
-<p>ToolTamer is a Bash tool that automates installation, synchronization, and cleanup of tools and configuration files across multiple systems. It uses your existing package manager — <strong>Homebrew</strong> on macOS, <strong>apt</strong> or <strong>pacman</strong> on Linux — and stores everything in a Git-backed configuration repository.</p>
+<p>ToolTamer automates installation, synchronization, and cleanup of tools and configuration files across multiple systems. It uses your existing package manager — <strong>Homebrew</strong> on macOS, <strong>apt</strong> or <strong>pacman</strong> on Linux — and stores everything in a Git-backed configuration repository. A Bash engine does the syncing; an interactive TUI (Python/Textual) sits on top, both reachable through the single <code>tt</code> command.</p>
 <h2 id="why-tooltamer">Why ToolTamer?<a class="headerlink" href="#why-tooltamer" title="Permanent link">&para;</a></h2>
 <p>Managing dotfiles across machines is a solved problem — until you also need to keep your installed packages in sync. Most solutions handle only one side:</p>
 <ul>
@@ -535,8 +535,9 @@
 <li><strong>Cross-platform</strong> — works on macOS (Homebrew), Linux (apt, pacman).</li>
 <li><strong>Hierarchical configuration</strong> — common base config inherited by all hosts, with host-specific overrides.</li>
 <li><strong>Git-backed</strong> — your entire configuration lives in a Git repo, shareable across machines.</li>
-<li><strong>Interactive menus</strong> — fzf-powered menus with fallback to numbered selection.</li>
-<li><strong>Dependency-aware</strong> — won't accidentally uninstall packages that are dependencies of others.</li>
+<li><strong>Interactive TUI</strong> — full-screen package and file browser with diffs, bulk actions and inline install/uninstall; falls back to fzf-powered or numbered menus when Python 3.12+ isn't available.</li>
+<li><strong>Dependency-aware</strong> — won't uninstall a package another installed package still needs. The check queries the package manager for real (no name guessing) and is cached, so repeated runs stay fast.</li>
+<li><strong>Tap-aware</strong> — Homebrew packages from third-party taps are stored fully qualified, so they install on a fresh machine without adding the tap first.</li>
 </ul>
 <h2 id="quick-overview">Quick Overview<a class="headerlink" href="#quick-overview" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>~/.config/toolTamer/configs/
