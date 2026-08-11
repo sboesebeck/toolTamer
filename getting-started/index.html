@@ -683,17 +683,20 @@
 <h2 id="the-interface">The Interface<a class="headerlink" href="#the-interface" title="Permanent link">&para;</a></h2>
 <p>With <strong>Python 3.12+</strong> available, <code>tt</code> opens a full-screen TUI (it sets up its
 own virtualenv the first time, which takes a moment). The dashboard shows what
-is out of sync, and from there you reach:</p>
-<ul>
-<li><strong>Packages</strong> — every package with its status: <code>OK</code> installed, <code>!!</code> missing,
-  <code>++</code> installed but in no config, <code>D</code> needed by something else. Install and
-  uninstall inline, move packages between configs, or mark several rows with
-  <code>Space</code> and act on all of them at once. Uninstalls are checked against the
-  real dependency graph first, so removing something another package needs is
-  refused rather than attempted.</li>
-<li><strong>Files</strong> — tracked files with a diff against what's on disk, and a per-file
-  choice of which version wins.</li>
-</ul>
+is out of sync on this machine, the config hierarchy in effect, and the
+available actions:</p>
+<p><img alt="The ToolTamer dashboard" src="../img/dashboard.svg" /></p>
+<p>From there you reach:</p>
+<p><strong>Packages</strong> — every package with its status: <code>OK</code> installed, <code>!!</code> missing,
+<code>++</code> installed but in no config, <code>D</code> needed by something else. Install and
+uninstall inline, move packages between configs, or mark several rows with
+<code>Space</code> and act on all of them at once. Uninstalls are checked against the
+real dependency graph first, so removing something another package needs is
+refused rather than attempted.</p>
+<p><img alt="The package manager screen" src="../img/packages.svg" /></p>
+<p><strong>Files</strong> — tracked files with a diff against what's actually on disk, and a
+per-file choice of which version wins.</p>
+<p><img alt="The file manager screen" src="../img/files.svg" /></p>
 <p>Everything below is also available from the command line — see
 <a href="#command-line">Command line</a>.</p>
 <h2 id="the-classic-menu">The Classic Menu<a class="headerlink" href="#the-classic-menu" title="Permanent link">&para;</a></h2>

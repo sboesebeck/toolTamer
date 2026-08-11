@@ -585,6 +585,9 @@
 <li><strong>Hierarchical configuration</strong> — common base config inherited by all hosts, with host-specific overrides.</li>
 <li><strong>Git-backed</strong> — your entire configuration lives in a Git repo, shareable across machines.</li>
 <li><strong>Interactive TUI</strong> — full-screen package and file browser with diffs, bulk actions and inline install/uninstall; falls back to fzf-powered or numbered menus when Python 3.12+ isn't available.</li>
+</ul>
+<p><img alt="The ToolTamer dashboard" src="img/dashboard.svg" /></p>
+<ul>
 <li><strong>Dependency-aware</strong> — won't uninstall a package another installed package still needs. The check queries the package manager for real (no name guessing) and is cached, so repeated runs stay fast.</li>
 <li><strong>Tap-aware</strong> — Homebrew packages from third-party taps are stored fully qualified, so they install on a fresh machine without adding the tap first.</li>
 </ul>
