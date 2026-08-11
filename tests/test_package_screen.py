@@ -779,3 +779,49 @@ def test_refresh_packages_swallows_no_matches_from_an_unmounted_screen(
     screen.query_one.side_effect = NoMatches("no pkg-filter")
 
     screen._refresh_packages()  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_tap_qualified_config_entry_counts_as_installed(
+    tmp_path: Path, monkeypatch
+):
+    """Regression: configs store tap packages fully qualified
+    (forketyfork/tap/clawtunes) so they install on a fresh machine, but
+    brew lists them installed under the short name (clawtunes). Comparing
+    the two naively showed every tap package as "!!" missing."""
+    base = tmp_path / "toolTamer"
+    common = base / "configs" / "common"
+    common.mkdir(parents=True)
+    (common / "files").mkdir()
+    (common / "to_install.brew").write_text("git\nforketyfork/tap/clawtunes\n")
+    (common / "files.conf").write_text("")
+    host = base / "configs" / "testhost"
+    host.mkdir(parents=True)
+    (host / "files").mkdir()
+    (host / "files.conf").write_text("")
+    (host / "includes.conf").write_text("")
+    (base / "tt.conf").write_text("")
+
+    # brew reports the SHORT name as installed
+    monkeypatch.setattr(
+        SystemInfo, "list_installed_packages", lambda self: ["git", "clawtunes"]
+    )
+    monkeypatch.setattr(SystemInfo, "list_dependency_packages", lambda self: set())
+    monkeypatch.setattr(SystemInfo, "get_required_by", lambda self, pkg: [])
+    monkeypatch.setattr(SystemInfo, "get_package_info", lambda self, pkg: "")
+    monkeypatch.setattr(SystemInfo, "get_package_tap", lambda self, pkg: None)
+
+    with patch("socket.gethostname", return_value="testhost"):
+        app = _HarnessApp(TTConfig(base), SystemInfo())
+        async with app.run_test() as pilot:
+            screen = app.screen
+            table = screen.query_one("#pkg-table", DataTable)
+            await pilot.pause()
+
+            rows = {
+                str(table.get_row(k)[2]): str(table.get_row(k)[1])
+                for k in table.rows
+            }
+            assert rows["forketyfork/tap/clawtunes"] == "OK", rows
+            # ...and it must NOT also show up as an untracked "++" extra
+            assert "clawtunes" not in rows, rows

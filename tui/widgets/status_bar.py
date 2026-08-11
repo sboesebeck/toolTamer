@@ -12,6 +12,7 @@ from textual.worker import get_current_worker
 
 from tui.core.config import TTConfig, tree_hash
 from tui.core.dep_cache import DependencyResolver, default_cache_path
+from tui.core.pkg_names import installed_index, is_installed, short_name
 from tui.core.system import SystemInfo
 
 
@@ -142,10 +143,18 @@ class StatusBar(Widget):
                 dep_only = set(self._system.list_dependency_packages())
             except Exception:
                 dep_only = set()
-            missing_pkgs = sorted(p for p in effective if p not in installed)
+            # Configs may name tap packages fully qualified
+            # (forketyfork/tap/clawtunes) while the package manager lists
+            # them short (clawtunes) — compare across both forms, or every
+            # tap package shows up as both "missing" and "extra".
+            installed_idx = installed_index(installed)
+            effective_short = {short_name(p) for p in effective_set}
+            missing_pkgs = sorted(
+                p for p in effective if not is_installed(p, installed_idx)
+            )
             excess_pkgs = sorted(
                 p for p in installed
-                if p not in effective_set and p not in dep_only
+                if short_name(p) not in effective_short and p not in dep_only
             )
             pkg_text, pkg_details = self._format_pkg_summary(
                 total_pkgs, missing_pkgs, excess_pkgs, refining=bool(excess_pkgs)

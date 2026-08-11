@@ -31,6 +31,7 @@ from pathlib import Path
 
 from tui.core.config import TTConfig
 from tui.core.dep_cache import DependencyResolver, default_cache_path
+from tui.core.pkg_names import installed_index, is_installed, short_name
 from tui.core.system import SystemInfo
 
 
@@ -66,19 +67,21 @@ def find_candidates(
     lookups complete, so a caller can show progress instead of the
     command looking hung on a cold cache."""
     installed_list = system.list_installed_packages()
-    installed = set(installed_list)
     dep_only = set(system.list_dependency_packages())
+    # Config entries may be tap-qualified while the installed list is
+    # short — match across both forms (see tui/core/pkg_names.py).
+    installed_idx = installed_index(installed_list)
 
     chain_pkgs: list[tuple[str, str]] = []
     for cfg in tt_config.resolve_chain(system.hostname):
         for pkg in sorted(tt_config.get_packages(cfg, system.installer)):
-            if pkg in installed:
+            if is_installed(pkg, installed_idx):
                 chain_pkgs.append((cfg, pkg))
 
     candidates: list[tuple[str, str, list[str]]] = []
     to_check: list[tuple[str, str]] = []
     for cfg, pkg in chain_pkgs:
-        if pkg in dep_only:
+        if short_name(pkg) in dep_only or pkg in dep_only:
             candidates.append((cfg, pkg, ["installed as a dependency"]))
         else:
             to_check.append((cfg, pkg))

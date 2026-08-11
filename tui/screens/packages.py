@@ -19,6 +19,7 @@ from textual.worker import get_current_worker
 
 from tui.core.config import TTConfig
 from tui.core.dep_cache import DependencyResolver, default_cache_path
+from tui.core.pkg_names import installed_index, is_installed, short_name
 from tui.core.system import SystemInfo
 from tui.screens._dest_picker import DestPickerScreen
 
@@ -299,7 +300,14 @@ class PackageScreen(Screen):
             effective: set[str] = set()
             for cfg in self._tt_config.resolve_chain(self._system.hostname):
                 effective.update(self._tt_config.get_packages(cfg, self._system.installer))
-            extras = set(installed) - effective - self._dep_packages
+            # effective holds config entries, which may be tap-qualified;
+            # installed names are short. Compare on the short form.
+            effective_short = {short_name(p) for p in effective}
+            extras = {
+                p for p in installed
+                if short_name(p) not in effective_short
+                and p not in self._dep_packages
+            }
             if not extras:
                 return set()
 
@@ -352,6 +360,9 @@ class PackageScreen(Screen):
             installed = set(self._system.list_installed_packages())
         except Exception:
             pass
+        # Configs store tap packages fully qualified while the package
+        # manager lists them short — match across both forms.
+        installed_idx = installed_index(installed)
 
         effective_set = set()
         self._all_rows = []
@@ -363,8 +374,9 @@ class PackageScreen(Screen):
                     continue
                 seen.add(pkg)
                 effective_set.add(pkg)
+                effective_set.add(short_name(pkg))
                 if installed:
-                    status = "OK" if pkg in installed else "!!"
+                    status = "OK" if is_installed(pkg, installed_idx) else "!!"
                 else:
                     status = "--"
                 if cfg == host:
@@ -475,6 +487,7 @@ class PackageScreen(Screen):
             installed = set(self._system.list_installed_packages())
         except Exception:
             pass
+        installed_idx = installed_index(installed)
 
         # Structural reverse-dependency check — distinct from the "D"
         # (dependency-only) tag, which only reflects install *reason*
@@ -483,7 +496,7 @@ class PackageScreen(Screen):
         # now; surface that here, before the user tries to uninstall it,
         # rather than only as a failure message afterwards. Only relevant
         # for installed packages — skip the subprocess call otherwise.
-        if package in installed:
+        if is_installed(package, installed_idx):
             required_by = self._safe_required_by(package)
             if worker.is_cancelled:
                 return
@@ -519,7 +532,7 @@ class PackageScreen(Screen):
             self.app.call_from_thread(log.write, Text(info_line))
 
         self.app.call_from_thread(log.write, Text(""))
-        if package not in installed:
+        if not is_installed(package, installed_idx):
             self.app.call_from_thread(
                 log.write, Text("i=install  r=remove from config  m=move  c=copy", style="dim")
             )

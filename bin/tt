@@ -375,6 +375,14 @@ function syncInstall() {
   log "now: running through all localy installed software"
   logn "Checking: "
   bash -c "$LIST" >$TMP/local_installed
+  # Configs may name third-party-tap packages fully qualified
+  # (forketyfork/tap/clawtunes) so they install on a machine where the
+  # tap isn't set up yet, while the package manager lists them installed
+  # under the short name (clawtunes). Compare on the short form via these
+  # normalized copies, or every tap package looks both "not in the list"
+  # (deletion candidate) and "not installed" (reinstall attempt).
+  sed 's|.*/||' $TMP/to_install.sorted >$TMP/to_install.short
+  sed 's|.*/||' $TMP/local_installed >$TMP/local_installed.short
   loadDepCache
   cat $TMP/local_installed | while read l; do
     if [ -z "$l" ]; then
@@ -386,7 +394,11 @@ function syncInstall() {
     if [[ "$l" =~ "#" ]]; then
       continue
     fi
-    if ! grep "$l" $TMP/to_install.sorted >/dev/null 2>&1; then
+    # -qxF: whole-line, literal. The old plain `grep "$l"` was a substring
+    # match, so an installed "vim" counted as present merely because the
+    # list contained "neovim" - and vice versa for names containing regex
+    # metacharacters (python@3.12, g++).
+    if ! grep -qxF "${l##*/}" $TMP/to_install.short 2>/dev/null; then
       # No more "name contains 'lib'" guess — it both missed real
       # dependencies whose name doesn't happen to contain "lib" and kept
       # genuinely unwanted packages that did. $USES (see checkSystem in
@@ -438,7 +450,7 @@ function syncInstall() {
     if [[ "$l" =~ "#" ]]; then
       continue
     fi
-    if ! grep "$l" $TMP/local_installed >/dev/null 2>&1; then
+    if ! grep -qxF "${l##*/}" $TMP/local_installed.short 2>/dev/null; then
       if $INSTALL "$l" </dev/tty >>$TMP/log 2>&1; then
         logn "${GN}I$RESET"
         note "Installed package" "$l"
