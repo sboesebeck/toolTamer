@@ -62,7 +62,7 @@ function ensure_tui_venv() {
     done
   fi
   if [ -z "$PY" ]; then
-    warn "Python 3.12+ not found — falling back to classic menu"
+    warn "Python 3.12+ not found — falling back to the classic text menu"
     return 1
   fi
   log "Setting up TUI environment..."
@@ -137,7 +137,7 @@ Options
   --updateToolTamer Snapshot package list into ToolTamer (installed tools only).
   --updateToolTamerFiles Snapshot package list and managed files into ToolTamer.
   --add FILE|DIR ... Add files to ToolTamer or check/update already-tracked files.
-  --admin           Open the admin helper menu (moving files, deduping packages, etc.).
+  --admin           Open the TUI (packages, files, taps, local scripts).
   --fix-taps        Rewrite third-party-tap packages in the configs to their fully
                     qualified names (user/repo/formula), so they install on a machine
                     where the tap isn't set up yet. Dry-run unless --apply is given.
@@ -149,7 +149,7 @@ Options
   $(basename "$0") --fix-taps --apply
   $(basename "$0") --cleanup-deps --apply --keep python@3.12
 
-No option starts the interactive menu. If fzf is installed, the menu uses an fzf picker (with colors) for navigation.
+No option opens the TUI. Without Python 3.12+ a reduced text menu is used instead.
 EOF
 }
 
@@ -798,7 +798,12 @@ if [ $# -gt 0 ]; then
     exit $?
     ;;
   --admin)
-    launch_tui || source $BINDIR/admin.sh
+    # The TUI *is* the admin interface now; the old text menu it used to
+    # fall back to has been removed (see bin/admin.sh).
+    launch_tui || {
+      err "The TUI needs Python 3.12+, which was not found."
+      exit 1
+    }
     exit 0
     ;;
   --fix-taps)
@@ -872,7 +877,7 @@ while true; do
     pause_before_menu
     ;;
   "4" | "a" | "A")
-    launch_tui || source $BINDIR/admin.sh
+    launch_tui || err "The TUI needs Python 3.12+, which was not found."
     ;;
   esac
 
