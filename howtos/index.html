@@ -459,10 +459,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#fix-duplicate-packages" class="md-nav__link">
+  <a href="#install-or-remove-packages" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fix duplicate packages
+        Install or remove packages
       
     </span>
   </a>
@@ -505,6 +505,28 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#manage-homebrew-taps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manage Homebrew taps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clean-up-the-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clean up the config
+      
+    </span>
+  </a>
   
 </li>
       
@@ -609,10 +631,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#fix-duplicate-packages" class="md-nav__link">
+  <a href="#install-or-remove-packages" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fix duplicate packages
+        Install or remove packages
       
     </span>
   </a>
@@ -655,6 +677,28 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#manage-homebrew-taps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manage Homebrew taps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clean-up-the-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clean up the config
+      
+    </span>
+  </a>
   
 </li>
       
@@ -712,14 +756,16 @@
 
 
 <h1 id="how-tos">How-Tos<a class="headerlink" href="#how-tos" title="Permanent link">&para;</a></h1>
+<p>These describe the TUI, which is what <code>tt</code> opens. Every screen lists its
+keys in the footer, so you never have to remember them.</p>
 <h2 id="add-a-config-file-to-tooltamer">Add a config file to ToolTamer<a class="headerlink" href="#add-a-config-file-to-tooltamer" title="Permanent link">&para;</a></h2>
 <p>You have a config file (e.g. <code>~/.config/starship.toml</code>) that you want to manage with ToolTamer.</p>
 <ol>
-<li>Open <code>tt --admin</code> → <strong>"Move local file to ToolTamer"</strong></li>
-<li>Select the target config (your host or <code>common</code>)</li>
-<li>Enter the path to the file</li>
-<li>ToolTamer copies it to the <code>files/</code> directory and adds the mapping to <code>files.conf</code></li>
+<li><code>tt</code> → <strong>File Manager</strong> (<code>d</code>)</li>
+<li>Press <code>n</code> to add a file. With <code>fzf</code> installed you get a fuzzy picker over your home directory; otherwise a directory browser opens.</li>
+<li>Choose the target config (your host, <code>common</code>, or a shared one)</li>
 </ol>
+<p>ToolTamer copies the file into that config's <code>files/</code> directory and adds the mapping to <code>files.conf</code>.</p>
 <p><strong>Or manually:</strong></p>
 <ol>
 <li>Copy the file:
@@ -729,38 +775,55 @@
     <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>starship.toml:.config/starship.toml
 </code></pre></div></li>
 </ol>
+<p><strong>Or from the shell</strong>, without opening the TUI:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>tt<span class="w"> </span>--add<span class="w"> </span>~/.config/starship.toml
+</code></pre></div>
 <h2 id="move-a-config-file-between-configs">Move a config file between configs<a class="headerlink" href="#move-a-config-file-between-configs" title="Permanent link">&para;</a></h2>
 <p>You have a file in your host config that should be shared via <code>common</code>:</p>
 <ol>
-<li>Open <code>tt --admin</code> → <strong>"Move files between configs in ToolTamer"</strong></li>
-<li>Select source config, then target config</li>
-<li>Select the file to move</li>
+<li><code>tt</code> → <strong>File Manager</strong> (<code>d</code>)</li>
+<li>Select the file, press <code>m</code></li>
+<li>Pick the target config</li>
 </ol>
-<p>ToolTamer moves the file and updates both <code>files.conf</code> entries.</p>
+<p>ToolTamer moves the stored copy and updates both <code>files.conf</code> entries.</p>
 <h2 id="move-a-package-between-configs">Move a package between configs<a class="headerlink" href="#move-a-package-between-configs" title="Permanent link">&para;</a></h2>
 <p>A package is listed in your host's <code>to_install.brew</code> but should be in <code>common</code>:</p>
 <ol>
-<li>Open <code>tt --admin</code> → <strong>"View differences of installed tools"</strong></li>
-<li>Or manually: remove the line from your host's file and add it to <code>common/to_install.brew</code></li>
+<li><code>tt</code> → <strong>Package Manager</strong> (<code>p</code>)</li>
+<li>Select the package, press <code>m</code> (or <code>c</code> to copy instead of move)</li>
+<li>Pick the target config</li>
 </ol>
-<h2 id="fix-duplicate-packages">Fix duplicate packages<a class="headerlink" href="#fix-duplicate-packages" title="Permanent link">&para;</a></h2>
-<p>When including multiple configs, the same package may be listed in several places. This is harmless but messy:</p>
-<ol>
-<li>Open <code>tt --admin</code> → <strong>"Fix duplicate packages"</strong></li>
-<li>ToolTamer removes packages from your host config that are already covered by included configs</li>
-</ol>
-<h2 id="view-whats-different">View what's different<a class="headerlink" href="#view-whats-different" title="Permanent link">&para;</a></h2>
-<h3 id="file-differences">File differences<a class="headerlink" href="#file-differences" title="Permanent link">&para;</a></h3>
-<p><code>tt --admin</code> → <strong>"View differences of files"</strong></p>
-<p>Shows a diff for each configured file where the ToolTamer version and the system version differ. For each difference, you choose:</p>
-<ul>
-<li><strong>Take system version</strong> — update ToolTamer with the local change</li>
-<li><strong>Restore ToolTamer version</strong> — overwrite the local file</li>
-<li><strong>Skip</strong> — do nothing</li>
-</ul>
-<h3 id="package-differences">Package differences<a class="headerlink" href="#package-differences" title="Permanent link">&para;</a></h3>
-<p><code>tt --admin</code> → <strong>"View differences of installed tools"</strong></p>
-<p>Shows packages that are missing (in config but not installed) or excess (installed but not in config). Use TAB to multi-select, then:</p>
+<p>To move several at once, mark them with <code>Space</code> first — <code>m</code> then applies to
+the whole selection and asks once for the destination.</p>
+<h2 id="install-or-remove-packages">Install or remove packages<a class="headerlink" href="#install-or-remove-packages" title="Permanent link">&para;</a></h2>
+<p>In the <strong>Package Manager</strong> (<code>p</code>), the status column tells you where each
+package stands:</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OK</code></td>
+<td>in a config and installed</td>
+</tr>
+<tr>
+<td><code>!!</code></td>
+<td>in a config but missing on this machine</td>
+</tr>
+<tr>
+<td><code>++</code></td>
+<td>installed but in no config</td>
+</tr>
+<tr>
+<td><code>D</code></td>
+<td>required by another installed package</td>
+</tr>
+</tbody>
+</table>
 <table>
 <thead>
 <tr>
@@ -770,35 +833,146 @@
 </thead>
 <tbody>
 <tr>
-<td><strong>F1</strong></td>
-<td>Install selected missing packages</td>
+<td><code>i</code></td>
+<td>install the selected package</td>
 </tr>
 <tr>
-<td><strong>F3</strong></td>
-<td>Remove selected excess packages from system</td>
+<td><code>x</code></td>
+<td>uninstall it from the system</td>
 </tr>
 <tr>
-<td><strong>F5</strong></td>
-<td>Add selected excess packages to ToolTamer config</td>
+<td><code>a</code></td>
+<td>add it to a config</td>
 </tr>
 <tr>
-<td><strong>F7</strong></td>
-<td>Remove selected missing packages from ToolTamer config</td>
+<td><code>r</code></td>
+<td>remove it from its config (leaves it installed)</td>
+</tr>
+<tr>
+<td><code>u</code></td>
+<td>uninstall <strong>and</strong> remove from the config</td>
+</tr>
+<tr>
+<td><code>d</code></td>
+<td>hide/show dependency-only packages</td>
+</tr>
+<tr>
+<td><code>Space</code></td>
+<td>mark a row — <code>x</code>, <code>m</code>, <code>r</code> and <code>u</code> then act on all marked rows</td>
+</tr>
+<tr>
+<td><code>/</code></td>
+<td>filter (also accepts a status: <code>!!</code>, <code>OK</code>, <code>++</code>)</td>
 </tr>
 </tbody>
 </table>
+<p>Uninstalling is checked against the real dependency graph first: if another
+installed package still needs it, the removal is refused and tells you what
+depends on it, rather than failing halfway through.</p>
+<p>For bulk actions you get a preview listing what will be processed and what is
+skipped (with the reason) before anything happens.</p>
+<h2 id="view-whats-different">View what's different<a class="headerlink" href="#view-whats-different" title="Permanent link">&para;</a></h2>
+<h3 id="file-differences">File differences<a class="headerlink" href="#file-differences" title="Permanent link">&para;</a></h3>
+<p><code>tt</code> → <strong>File Manager</strong> (<code>d</code>). Each tracked file shows its status, and
+selecting one shows a diff against what's actually on disk:</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OK</code></td>
+<td>identical</td>
+</tr>
+<tr>
+<td><code>!!</code></td>
+<td>differs</td>
+</tr>
+<tr>
+<td><code>--</code></td>
+<td>missing on the system</td>
+</tr>
+<tr>
+<td><code>&lt;&lt;</code></td>
+<td>shadowed by another config</td>
+</tr>
+<tr>
+<td><code>==</code></td>
+<td>duplicate within the same config</td>
+</tr>
+</tbody>
+</table>
+<p>Then choose per file:</p>
+<ul>
+<li><code>a</code> — apply the ToolTamer version to the system (overwrites the local file)</li>
+<li><code>u</code> — save the local change into ToolTamer. For inherited files you are
+  asked whether it should go into the shared config (affecting all hosts) or
+  become a host-local override.</li>
+<li><code>r</code> — stop managing the file (leaves it on the system)</li>
+</ul>
+<p>Directories are supported and diffed recursively; before a sync that would
+delete files on the destination, you get an explicit confirmation listing them.</p>
+<h3 id="package-differences">Package differences<a class="headerlink" href="#package-differences" title="Permanent link">&para;</a></h3>
+<p><code>tt</code> → <strong>Package Manager</strong> (<code>p</code>) — see the table above. Filter with <code>/</code> to see
+only one category, e.g. <code>!!</code> for everything missing.</p>
+<h2 id="manage-homebrew-taps">Manage Homebrew taps<a class="headerlink" href="#manage-homebrew-taps" title="Permanent link">&para;</a></h2>
+<p><code>tt</code> → <strong>Tap Manager</strong> (<code>t</code>, macOS only):</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>a</code></td>
+<td>add a tap to a config</td>
+</tr>
+<tr>
+<td><code>r</code></td>
+<td>remove a tap from a config</td>
+</tr>
+<tr>
+<td><code>m</code></td>
+<td>move a tap to another config</td>
+</tr>
+<tr>
+<td><code>t</code> / <code>u</code></td>
+<td>tap / untap on this machine</td>
+</tr>
+<tr>
+<td><code>s</code></td>
+<td>sync all configured taps</td>
+</tr>
+</tbody>
+</table>
+<p>Note that a package listed under its fully qualified name
+(<code>forketyfork/tap/clawtunes</code>) does not need a tap entry — brew adds the tap
+itself. See <a href="../configuration/#to_installbrew-to_installapt-to_installpacman">Configuration</a>.</p>
+<h2 id="clean-up-the-config">Clean up the config<a class="headerlink" href="#clean-up-the-config" title="Permanent link">&para;</a></h2>
+<p>Two one-off audit tools, both dry-run by default:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>tt<span class="w"> </span>--fix-taps<span class="w">        </span><span class="c1"># rewrite tap packages to their fully qualified names</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>tt<span class="w"> </span>--cleanup-deps<span class="w">    </span><span class="c1"># drop packages only listed because something depends on them</span>
+</code></pre></div>
+<p>Add <code>--apply</code> to actually change anything; you get a preview and a
+confirmation prompt first. <code>tt --cleanup-deps --keep &lt;package&gt;</code> protects
+individual packages from removal.</p>
 <h2 id="use-tooltamer-without-interaction">Use ToolTamer without interaction<a class="headerlink" href="#use-tooltamer-without-interaction" title="Permanent link">&para;</a></h2>
 <p>For scripting or cron jobs:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>tt<span class="w"> </span>--syncSys<span class="w">            </span><span class="c1"># Full sync (packages + files + local_install.sh)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>tt<span class="w"> </span>--syncFilesOnly<span class="w">      </span><span class="c1"># Only sync files</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>tt<span class="w"> </span>--updateToolTamer<span class="w">    </span><span class="c1"># Snapshot packages</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>tt<span class="w"> </span>--updateToolTamerFiles<span class="w">  </span><span class="c1"># Snapshot packages + files</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>tt<span class="w"> </span>--syncSys<span class="w">            </span><span class="c1"># Full sync (packages + files + local_install.sh)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>tt<span class="w"> </span>--syncFilesOnly<span class="w">      </span><span class="c1"># Only sync files</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>tt<span class="w"> </span>--updateToolTamer<span class="w">    </span><span class="c1"># Snapshot packages</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>tt<span class="w"> </span>--updateToolTamerFiles<span class="w">  </span><span class="c1"># Snapshot packages + files</span>
 </code></pre></div>
 <h2 id="set-up-a-shared-config-for-multiple-macs">Set up a shared config for multiple Macs<a class="headerlink" href="#set-up-a-shared-config-for-multiple-macs" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Create <code>common_mac/</code> with shared macOS packages and configs</li>
 <li>In each Mac's <code>includes.conf</code>, add:
-    <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>common_mac
+    <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>common_mac
 </code></pre></div></li>
 <li>Put Mac-specific overrides (like different Homebrew taps) in the host directory</li>
 </ol>
@@ -807,10 +981,10 @@
 <li>Install ToolTamer on the new machine</li>
 <li>Run <code>tt</code> — provide your Git repo URL</li>
 <li>ToolTamer creates a host directory based on the hostname</li>
-<li>Use "Snapshot System" to capture the current state</li>
+<li>Use <strong>Snapshot</strong> (<code>s</code>) to capture the current state</li>
 <li>Or: create a symlink to an existing host config if the setup should be identical:
-    <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nb">cd</span><span class="w"> </span>~/.config/toolTamer/configs
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>ln<span class="w"> </span>-s<span class="w"> </span>existingHost<span class="w"> </span>newHostname
+    <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nb">cd</span><span class="w"> </span>~/.config/toolTamer/configs
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>ln<span class="w"> </span>-s<span class="w"> </span>existingHost<span class="w"> </span>newHostname
 </code></pre></div></li>
 </ol>
 

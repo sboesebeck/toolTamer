@@ -396,15 +396,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-classic-menu" class="md-nav__link">
+  <a href="#what-the-actions-do" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The Classic Menu
+        What the actions do
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="The Classic Menu">
+    <nav class="md-nav" aria-label="What the actions do">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -578,15 +578,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-classic-menu" class="md-nav__link">
+  <a href="#what-the-actions-do" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The Classic Menu
+        What the actions do
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="The Classic Menu">
+    <nav class="md-nav" aria-label="What the actions do">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -697,18 +697,10 @@ refused rather than attempted.</p>
 <p><strong>Files</strong> — tracked files with a diff against what's actually on disk, and a
 per-file choice of which version wins.</p>
 <p><img alt="The file manager screen" src="../img/files.svg" /></p>
-<p>Everything below is also available from the command line — see
-<a href="#command-line">Command line</a>.</p>
-<h2 id="the-classic-menu">The Classic Menu<a class="headerlink" href="#the-classic-menu" title="Permanent link">&para;</a></h2>
-<p>Without a suitable Python, <code>tt</code> falls back to the text menu (also reachable
-via <code>tt --admin</code>):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>-----&gt; ToolTamer V1.0 - main menu
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>1. Update System - full system update, local files, installation, local install script
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>2. Files only - update only files
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>3. Snapshot System
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>4. Admin
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>5. Quit
-</code></pre></div>
+<p>Every screen lists its keys in the footer. Everything is also available from
+the command line — see <a href="#command-line">Command line</a>.</p>
+<h2 id="what-the-actions-do">What the actions do<a class="headerlink" href="#what-the-actions-do" title="Permanent link">&para;</a></h2>
+<p>The dashboard actions (and their command-line equivalents) are:</p>
 <h3 id="update-system">Update System<a class="headerlink" href="#update-system" title="Permanent link">&para;</a></h3>
 <p>Applies your ToolTamer configuration to the current machine:</p>
 <ol>
@@ -728,14 +720,13 @@ via <code>tt --admin</code>):</p>
 <p>This is useful when you've set up a new machine manually and want to capture that state.</p>
 <h2 id="command-line">Command line<a class="headerlink" href="#command-line" title="Permanent link">&para;</a></h2>
 <p>Everything can be driven without the interactive interface:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>tt<span class="w">                    </span><span class="c1"># interactive TUI (classic menu as fallback)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>tt<span class="w"> </span>--syncSys<span class="w">          </span><span class="c1"># full sync: packages, files, local_install.sh</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>tt<span class="w"> </span>--syncFilesOnly<span class="w">    </span><span class="c1"># only files</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>tt<span class="w"> </span>--updateToolTamer<span class="w">  </span><span class="c1"># snapshot installed packages into the config</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>tt<span class="w"> </span>--admin<span class="w">            </span><span class="c1"># admin menu</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>tt<span class="w"> </span>--fix-taps<span class="w">         </span><span class="c1"># qualify third-party-tap package names</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>tt<span class="w"> </span>--cleanup-deps<span class="w">     </span><span class="c1"># drop packages only listed because something depends on them</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>tt<span class="w"> </span>-h
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>tt<span class="w">                    </span><span class="c1"># interactive TUI</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>tt<span class="w"> </span>--syncSys<span class="w">          </span><span class="c1"># full sync: packages, files, local_install.sh</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>tt<span class="w"> </span>--syncFilesOnly<span class="w">    </span><span class="c1"># only files</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>tt<span class="w"> </span>--updateToolTamer<span class="w">  </span><span class="c1"># snapshot installed packages into the config</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>tt<span class="w"> </span>--fix-taps<span class="w">         </span><span class="c1"># qualify third-party-tap package names</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>tt<span class="w"> </span>--cleanup-deps<span class="w">     </span><span class="c1"># drop packages only listed because something depends on them</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>tt<span class="w"> </span>-h
 </code></pre></div>
 <p><code>--fix-taps</code> and <code>--cleanup-deps</code> only report what they would do; add
 <code>--apply</code> to change your config, which asks for confirmation first. Both pass
