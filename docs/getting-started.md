@@ -19,16 +19,26 @@ If you create a fresh config, ToolTamer will offer to seed it with common config
 
 With **Python 3.12+** available, `tt` opens a full-screen TUI (it sets up its
 own virtualenv the first time, which takes a moment). The dashboard shows what
-is out of sync, and from there you reach:
+is out of sync on this machine, the config hierarchy in effect, and the
+available actions:
 
-- **Packages** — every package with its status: `OK` installed, `!!` missing,
-  `++` installed but in no config, `D` needed by something else. Install and
-  uninstall inline, move packages between configs, or mark several rows with
-  `Space` and act on all of them at once. Uninstalls are checked against the
-  real dependency graph first, so removing something another package needs is
-  refused rather than attempted.
-- **Files** — tracked files with a diff against what's on disk, and a per-file
-  choice of which version wins.
+![The ToolTamer dashboard](img/dashboard.svg)
+
+From there you reach:
+
+**Packages** — every package with its status: `OK` installed, `!!` missing,
+`++` installed but in no config, `D` needed by something else. Install and
+uninstall inline, move packages between configs, or mark several rows with
+`Space` and act on all of them at once. Uninstalls are checked against the
+real dependency graph first, so removing something another package needs is
+refused rather than attempted.
+
+![The package manager screen](img/packages.svg)
+
+**Files** — tracked files with a diff against what's actually on disk, and a
+per-file choice of which version wins.
+
+![The file manager screen](img/files.svg)
 
 Everything below is also available from the command line — see
 [Command line](#command-line).

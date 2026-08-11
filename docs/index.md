@@ -21,6 +21,9 @@ ToolTamer handles both: it installs missing packages, removes unlisted ones, and
 - **Hierarchical configuration** — common base config inherited by all hosts, with host-specific overrides.
 - **Git-backed** — your entire configuration lives in a Git repo, shareable across machines.
 - **Interactive TUI** — full-screen package and file browser with diffs, bulk actions and inline install/uninstall; falls back to fzf-powered or numbered menus when Python 3.12+ isn't available.
+
+![The ToolTamer dashboard](img/dashboard.svg)
+
 - **Dependency-aware** — won't uninstall a package another installed package still needs. The check queries the package manager for real (no name guessing) and is cached, so repeated runs stay fast.
 - **Tap-aware** — Homebrew packages from third-party taps are stored fully qualified, so they install on a fresh machine without adding the tap first.
 
