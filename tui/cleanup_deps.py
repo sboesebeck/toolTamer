@@ -25,12 +25,12 @@ Usage:
 """
 
 import argparse
-import concurrent.futures
 import os
 import sys
 from pathlib import Path
 
 from tui.core.config import TTConfig
+from tui.core.dep_cache import DependencyResolver, default_cache_path
 from tui.core.system import SystemInfo
 
 
@@ -39,6 +39,7 @@ def find_candidates(
     system: SystemInfo,
     fast: bool = False,
     progress=None,
+    resolver=None,
 ) -> list[tuple[str, str, list[str]]]:
     """Packages in the current host's resolved config chain that are
     installed and look like dependencies rather than things explicitly
@@ -54,18 +55,18 @@ def find_candidates(
          dependency entries essentially for free.
       2. get_required_by() — one subprocess call PER remaining package
          (structural: currently required by another installed package),
-         run in parallel across a thread pool since these are
-         independent, read-only, I/O-bound calls. Catches what (1)
-         misses (the json-glib report) but is the slow part on a config
-         with hundreds of packages — a real run against this project's
-         own ~500-package config took minutes single-threaded before
-         parallelizing it. fast=True skips this tier entirely for a
-         near-instant, less thorough pass.
+         via DependencyResolver so results are cached on disk and any
+         misses run in parallel. Catches what (1) misses (the json-glib
+         report). On a cold cache this is still the slow part on a config
+         with hundreds of packages (hence the progress callback); after
+         that it's free until something is installed or removed.
+         fast=True skips this tier entirely.
 
     progress: optional callable(done, total) invoked as tier 2's
-    parallel checks complete, so a caller can show progress instead of
-    the command looking hung for minutes on a large config."""
-    installed = set(system.list_installed_packages())
+    lookups complete, so a caller can show progress instead of the
+    command looking hung on a cold cache."""
+    installed_list = system.list_installed_packages()
+    installed = set(installed_list)
     dep_only = set(system.list_dependency_packages())
 
     chain_pkgs: list[tuple[str, str]] = []
@@ -83,24 +84,17 @@ def find_candidates(
             to_check.append((cfg, pkg))
 
     if not fast and to_check:
-        results: dict[tuple[str, str], list[str]] = {}
-        done = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            futures = {
-                pool.submit(system.get_required_by, pkg): (cfg, pkg)
-                for cfg, pkg in to_check
-            }
-            for future in concurrent.futures.as_completed(futures):
-                cfg, pkg = futures[future]
-                try:
-                    results[(cfg, pkg)] = future.result()
-                except Exception:
-                    results[(cfg, pkg)] = []
-                done += 1
-                if progress:
-                    progress(done, len(to_check))
+        if resolver is None:
+            resolver = DependencyResolver(
+                system, default_cache_path(tt_config.base)
+            )
+        resolved = resolver.resolve(
+            sorted({pkg for _, pkg in to_check}),
+            installed=installed_list,
+            progress=progress,
+        )
         for cfg, pkg in to_check:
-            required_by = results.get((cfg, pkg), [])
+            required_by = resolved.get(pkg, [])
             if required_by:
                 candidates.append((cfg, pkg, required_by))
 
@@ -136,19 +130,35 @@ def main(argv: list[str] | None = None) -> int:
         "but misses cases the cheap signal alone gets wrong (see "
         "get_required_by in tui/core/system.py)",
     )
+    parser.add_argument(
+        "--rescan", action="store_true",
+        help="discard the cached reverse-dependency data and look "
+        "everything up again (the cache normally invalidates itself when "
+        "packages are installed or removed)",
+    )
     args = parser.parse_args(argv)
 
     base = Path(os.environ.get("TT_BASE", str(Path.home() / ".config" / "toolTamer")))
     tt_config = TTConfig(base)
     system = SystemInfo()
+    resolver = DependencyResolver(system, default_cache_path(base))
+    if args.rescan:
+        resolver.invalidate()
+
+    # \r-based progress only makes sense on a terminal — piped or
+    # redirected it turns into one line per package.
+    interactive = sys.stdout.isatty()
 
     def progress(done: int, total: int) -> None:
-        print(f"\rChecking packages... {done}/{total}", end="", flush=True)
+        if interactive:
+            print(f"\rChecking packages... {done}/{total}", end="", flush=True)
 
     candidates = find_candidates(
-        tt_config, system, fast=args.fast, progress=None if args.fast else progress
+        tt_config, system, fast=args.fast,
+        progress=None if args.fast else progress,
+        resolver=resolver,
     )
-    if not args.fast:
+    if not args.fast and interactive:
         print()  # newline after the progress line, if any was printed
 
     candidates = [c for c in candidates if c[1] not in args.keep]

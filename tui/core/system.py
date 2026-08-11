@@ -165,6 +165,46 @@ class SystemInfo:
                     pass
         return added
 
+    def list_package_full_names(self) -> dict[str, str]:
+        """Short name -> fully qualified name, for every installed package
+        that comes from a third-party tap.
+
+        A package from such a tap only installs on a machine where its tap
+        is already tapped — `brew install clawtunes` fails there, while
+        `brew install forketyfork/tap/clawtunes` works because brew taps
+        automatically when given a fully qualified name. That's what makes
+        the qualified form the right thing to store in a config.
+
+        One bulk call for all installed packages (unlike get_package_tap,
+        which is per-package), because this is used to audit whole configs.
+        Core/cask-core packages are excluded — they need no qualification.
+        Empty dict for non-brew installers (no tap concept) or any
+        failure."""
+        if self.installer != "brew":
+            return {}
+        try:
+            result = subprocess.run(
+                ["brew", "info", "--json=v2", "--installed"],
+                capture_output=True, text=True, timeout=60,
+            )
+            import json
+            data = json.loads(result.stdout)
+        except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+            return {}
+
+        mapping: dict[str, str] = {}
+        for formula in data.get("formulae", []) or []:
+            tap = formula.get("tap")
+            name, full = formula.get("name"), formula.get("full_name")
+            if tap and tap != "homebrew/core" and name and full and name != full:
+                mapping[name] = full
+        for cask in data.get("casks", []) or []:
+            tap = cask.get("tap")
+            name, full = cask.get("token"), cask.get("full_token")
+            if tap and tap != "homebrew/cask" and name and full and name != full:
+                mapping[name] = full
+        return mapping
+
     def get_package_tap(self, package: str) -> str | None:
         """Get the tap a brew package comes from, or None for core."""
         if self.installer != "brew":

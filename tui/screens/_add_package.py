@@ -68,9 +68,31 @@ class AddPackageScreen(ModalScreen[str | None]):
         pkg = self.query_one("#pkg-name-input", Input).value.strip()
         if not pkg:
             return
+        pkg = self._qualify(pkg)
         dest = str(event.option.id)
         self._tt_config._add_package(dest, pkg, self._system.installer)
         self.dismiss(pkg)
+
+    def _qualify(self, package: str) -> str:
+        """Store third-party-tap packages under their fully qualified
+        name (forketyfork/tap/clawtunes, not clawtunes).
+
+        The short name only resolves on a machine where the tap is
+        already tapped, so storing it that way makes the package
+        uninstallable on a fresh host — while `brew install
+        user/repo/formula` taps automatically. Doing this here is what
+        keeps tt-fix-taps a one-off cleanup instead of a recurring chore.
+
+        Left as typed if the name is already qualified, or if the tap
+        lookup (a subprocess call) fails — better to add the package
+        as-is than to lose the input."""
+        if "/" in package:
+            return package
+        try:
+            tap = self._system.get_package_tap(package)
+        except Exception:
+            return package
+        return f"{tap}/{package}" if tap else package
 
     def action_cancel(self) -> None:
         self.dismiss(None)

@@ -1,7 +1,5 @@
 """Package manager screen with hierarchy view and move/copy."""
 
-import concurrent.futures
-
 from rich.text import Text
 
 from textual import work
@@ -20,6 +18,7 @@ from textual.widgets import (
 from textual.worker import get_current_worker
 
 from tui.core.config import TTConfig
+from tui.core.dep_cache import DependencyResolver, default_cache_path
 from tui.core.system import SystemInfo
 from tui.screens._dest_picker import DestPickerScreen
 
@@ -133,6 +132,12 @@ class PackageScreen(Screen):
         super().__init__()
         self._tt_config = tt_config
         self._system = system
+        # Reverse-dependency lookups are slow enough (one subprocess call
+        # per package) that they're cached on disk between runs — see
+        # tui/core/dep_cache.py.
+        self._deps = DependencyResolver(
+            system, default_cache_path(tt_config.base)
+        )
         self._all_rows: list[tuple[str, str, str, str, bool]] = []  # status, pkg, tag, key, is_dep
         self._dep_packages: set[str] = set()
         self._hide_deps: bool = False
@@ -274,12 +279,12 @@ class PackageScreen(Screen):
         package in the list. Empty on any failure — display-only, must
         never crash the screen.
 
-        The remaining per-package calls run in a thread pool: on a real
-        machine with hundreds of untracked packages, doing this one at a
-        time made the "D" tag take minutes to show up (still running in
-        the background, so it didn't hang the screen — but it looked to
-        the user like those packages just weren't dependencies). Mirrors
-        the same fix already applied to tui/cleanup_deps.py.
+        The lookups go through DependencyResolver, which caches results
+        on disk keyed on the installed-package set and runs any misses in
+        parallel — a cold cache on a machine with hundreds of untracked
+        packages still takes a while (hence the title indicator), but
+        every run after that is essentially free until something is
+        installed or removed.
 
         should_stop: optional zero-arg callable checked as each parallel
         check completes — lets _load_extra_deps() bail out of a still-
@@ -288,39 +293,20 @@ class PackageScreen(Screen):
         for every remaining package, and pending-but-not-yet-started
         checks are cancelled outright."""
         try:
-            installed = set(self._system.list_installed_packages())
+            installed = self._system.list_installed_packages()
             if not installed:
                 return set()
             effective: set[str] = set()
             for cfg in self._tt_config.resolve_chain(self._system.hostname):
                 effective.update(self._tt_config.get_packages(cfg, self._system.installer))
-            extras = installed - effective - self._dep_packages
+            extras = set(installed) - effective - self._dep_packages
             if not extras:
                 return set()
 
-            found: set[str] = set()
-            pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
-            try:
-                futures = {
-                    pool.submit(self._system.get_required_by, pkg): pkg
-                    for pkg in extras
-                }
-                for future in concurrent.futures.as_completed(futures):
-                    pkg = futures[future]
-                    try:
-                        if future.result():
-                            found.add(pkg)
-                    except Exception:
-                        pass
-                    if should_stop is not None and should_stop():
-                        break
-            finally:
-                # cancel_futures drops anything not yet started; already-
-                # running calls finish on their own (there's no way to
-                # force-kill a subprocess.run() mid-flight from here) but
-                # we don't wait around for them.
-                pool.shutdown(wait=False, cancel_futures=True)
-            return found
+            resolved = self._deps.resolve(
+                sorted(extras), installed=installed, should_stop=should_stop
+            )
+            return {pkg for pkg, users in resolved.items() if users}
         except Exception:
             return set()
 
@@ -329,7 +315,9 @@ class PackageScreen(Screen):
         empty list on any failure — the check must never crash or block
         an uninstall attempt on its own."""
         try:
-            return self._system.get_required_by(package)
+            return self._deps.required_by(
+                package, installed=self._system.list_installed_packages()
+            )
         except Exception:
             return []
 
