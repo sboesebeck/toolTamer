@@ -31,6 +31,13 @@ nav:
   - Configuration: configuration.md
   - How-Tos: howtos.md
 
+# Internal design notes live under docs/ but are not user documentation.
+# They are gitignored, yet mkdocs reads the filesystem rather than git, so
+# without this they get built and published to GitHub Pages.
+exclude_docs: |
+  plans/
+  superpowers/
+
 markdown_extensions:
   - admonition
   - pymdownx.highlight:

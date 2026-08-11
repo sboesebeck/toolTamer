@@ -15,9 +15,28 @@ On first run, you'll be asked for a **Git repository URL** for your configuratio
 
 If you create a fresh config, ToolTamer will offer to seed it with common config files (like `.zshrc`, `.bashrc`, etc.) based on what exists in your home directory.
 
-## The Main Menu
+## The Interface
 
-After the optional Git pull, you'll see:
+With **Python 3.12+** available, `tt` opens a full-screen TUI (it sets up its
+own virtualenv the first time, which takes a moment). The dashboard shows what
+is out of sync, and from there you reach:
+
+- **Packages** — every package with its status: `OK` installed, `!!` missing,
+  `++` installed but in no config, `D` needed by something else. Install and
+  uninstall inline, move packages between configs, or mark several rows with
+  `Space` and act on all of them at once. Uninstalls are checked against the
+  real dependency graph first, so removing something another package needs is
+  refused rather than attempted.
+- **Files** — tracked files with a diff against what's on disk, and a per-file
+  choice of which version wins.
+
+Everything below is also available from the command line — see
+[Command line](#command-line).
+
+## The Classic Menu
+
+Without a suitable Python, `tt` falls back to the text menu (also reachable
+via `tt --admin`):
 
 ```
 -----> ToolTamer V1.0 - main menu
@@ -49,6 +68,26 @@ The reverse direction: captures your current system state into ToolTamer:
 - Copies current versions of configured files into ToolTamer
 
 This is useful when you've set up a new machine manually and want to capture that state.
+
+## Command line
+
+Everything can be driven without the interactive interface:
+
+```bash
+tt                    # interactive TUI (classic menu as fallback)
+tt --syncSys          # full sync: packages, files, local_install.sh
+tt --syncFilesOnly    # only files
+tt --updateToolTamer  # snapshot installed packages into the config
+tt --admin            # admin menu
+tt --fix-taps         # qualify third-party-tap package names
+tt --cleanup-deps     # drop packages only listed because something depends on them
+tt -h
+```
+
+`--fix-taps` and `--cleanup-deps` only report what they would do; add
+`--apply` to change your config, which asks for confirmation first. Both pass
+any further arguments through, so `tt --fix-taps --help` shows their own
+options.
 
 ## Typical Workflow
 

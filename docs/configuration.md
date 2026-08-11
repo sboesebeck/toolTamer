@@ -56,6 +56,26 @@ python3
 
 ToolTamer ensures **exactly** these packages are installed. Packages present on the system but **not** in any config file will be offered for removal (dependencies are preserved).
 
+!!! tip "Packages from third-party taps need their full name"
+
+    List a tapped Homebrew package fully qualified —
+    `forketyfork/tap/clawtunes`, not `clawtunes`. The short name only
+    resolves on a machine where that tap has already been added, so it makes
+    the package uninstallable on a fresh host; `brew install user/repo/formula`
+    adds the tap by itself. Adding a package through the TUI does this
+    automatically, and `tt --fix-taps` fixes existing entries.
+
+!!! note "What counts as a dependency"
+
+    A package is kept when another *installed* package actually requires it —
+    ToolTamer asks the package manager, it does not guess from the name. That
+    answer is cached per machine (see `cache/` below), so only the first run
+    after installing or removing something pays for the lookup.
+
+    Note this is a different question from "was it installed automatically".
+    A package you installed by hand can still be required by something else,
+    and is then kept.
+
 ### `files.conf`
 
 Maps files in the `files/` subdirectory to their target location relative to `$HOME`.
@@ -93,6 +113,20 @@ A list of Homebrew taps, one per line:
 homebrew/cask-fonts
 hashicorp/tap
 ```
+
+These are added before packages are installed. Note that a package listed
+under its fully qualified name (`hashicorp/tap/terraform`) does not need an
+entry here — brew adds the tap on its own — but listing taps is still useful
+for casks and for taps you want present regardless.
+
+## Generated files
+
+Next to `configs/` there is a `cache/` directory holding machine-local data,
+currently the reverse-dependency lookups that keep repeated runs fast. It is
+regenerated automatically whenever your installed packages change.
+
+Add `cache/` to your config repo's `.gitignore` — it is specific to one
+machine and has no business being shared.
 
 ## Global Settings
 
