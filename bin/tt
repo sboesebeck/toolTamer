@@ -85,6 +85,22 @@ function launch_tui() {
   return 1
 }
 
+# Run one of the Python helper tools (tui/*.py with a main()) through the
+# managed venv, so `tt --fix-taps` works without the user having to
+# activate anything or know where the venv lives. Passes the remaining
+# arguments straight through, so `tt --fix-taps --apply` behaves exactly
+# like calling the tool directly.
+function run_python_tool() {
+  local module="$1"
+  shift
+  local REPO_ROOT="$BINDIR/.."
+  if ! ensure_tui_venv; then
+    err "Python 3.12+ environment unavailable - cannot run $module"
+    return 1
+  fi
+  "$REPO_ROOT/.venv/bin/python3" -m "$module" "$@"
+}
+
 function cleanup() {
   echo "Cleaning up"
   rm -rf $TMP
@@ -122,7 +138,16 @@ Options
   --updateToolTamerFiles Snapshot package list and managed files into ToolTamer.
   --add FILE|DIR ... Add files to ToolTamer or check/update already-tracked files.
   --admin           Open the admin helper menu (moving files, deduping packages, etc.).
+  --fix-taps        Rewrite third-party-tap packages in the configs to their fully
+                    qualified names (user/repo/formula), so they install on a machine
+                    where the tap isn't set up yet. Dry-run unless --apply is given.
+  --cleanup-deps    Remove packages from the configs that are only there because
+                    something else depends on them. Dry-run unless --apply is given.
   -h, --help        Show this help text and exit.
+
+--fix-taps and --cleanup-deps pass any further arguments through, e.g.
+  $(basename "$0") --fix-taps --apply
+  $(basename "$0") --cleanup-deps --apply --keep python@3.12
 
 No option starts the interactive menu. If fzf is installed, the menu uses an fzf picker (with colors) for navigation.
 EOF
@@ -763,6 +788,16 @@ if [ $# -gt 0 ]; then
   --admin)
     launch_tui || source $BINDIR/admin.sh
     exit 0
+    ;;
+  --fix-taps)
+    shift
+    run_python_tool tui.fix_taps "$@"
+    exit $?
+    ;;
+  --cleanup-deps)
+    shift
+    run_python_tool tui.cleanup_deps "$@"
+    exit $?
     ;;
   -h | --help)
     show_help
