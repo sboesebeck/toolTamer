@@ -9,7 +9,9 @@ There are solutions out there, that did not work for my usecases:
 
 After several tries with other tools, I created my own version of a config / installation synchronization tool that maybe interesting for others:
 
-**ToolTamer** is a Bash script designed to automate the installation, synchronization, and cleanup of tools and configuration files across multiple systems. It leverages existing package managers like **apt** on Linux and **Homebrew** on macOS to manage software packages, ensuring a consistent and clean working environment on all your devices.
+**ToolTamer** automates the installation, synchronization, and cleanup of tools and configuration files across multiple systems. It leverages existing package managers like **apt** on Linux and **Homebrew** on macOS to manage software packages, ensuring a consistent and clean working environment on all your devices.
+
+It comes as a Bash sync engine (`bin/`) plus an interactive TUI and helper tools written in Python/Textual (`tui/`). `tt` is the single entry point for both.
 
 ## Features
 
@@ -18,6 +20,8 @@ After several tries with other tools, I created my own version of a config / ins
 - **Cross-Platform Support**: Works seamlessly on both Linux and macOS systems. (not heavily tested yet) 
 - **Modular Configurations**: it is designed to use git to store your configurations and make them available on all systems 
 - **Easy Setup**: If no configuration is present, ToolTamer prompts for a Git repository to check out the configuration.
+- **Interactive TUI**: a full-screen interface for browsing packages and files, with diffs, bulk actions and inline install/uninstall.
+- **Dependency-aware**: never removes a package another installed package still needs — the check is real (not a name heuristic) and cached, so it stays fast.
 
 ## Table of Contents
 
@@ -39,18 +43,19 @@ After several tries with other tools, I created my own version of a config / ins
 
 - **Operating System**: Linux or macOS
 - **Package Manager**:
-  - **Linux**: `apt` (Advanced Package Tool)
-    - Install `apt-rdepends`:
-      ```bash
-      sudo apt install apt-rdepends
-      ```
+  - **Linux**: `apt` (Advanced Package Tool) — nothing extra needed, the
+    dependency check uses `apt-cache`, which comes with apt
   - Arch-Linux: ToolTamer does have `pacman` support, but it was not tested yet
+    (uninstalling is not implemented there — unlisted packages are reported only)
   - **macOS**: [Homebrew](https://brew.sh/)
     - Install Homebrew:
       ```bash
       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
       ```
 - **Git**: Ensure Git is installed to clone repositories and manage configurations.
+- **Python 3.12+** (optional): needed for the interactive TUI and the
+  `--fix-taps` / `--cleanup-deps` helpers. `tt` creates its own virtualenv on
+  first use; without a suitable Python it falls back to the classic text menu.
 
 ## Installation
 
@@ -86,7 +91,41 @@ eval "$(~/toolTamer/bin/tt -sh)"
    or just `tt` if it is in your path.
 
 2. you will be asked for a git url - if you don't want to provide any, just hit enter. You will then be asked to create a default structure in `$HOME/.config/toolTamer`. If you provided an url, it will be checked out in `$HOME/.config/toolTamer`
-3. then a menu will appear. Here you can choose either to apply the config to your system, or take a snapshot from the system and put it in your config
+3. then the interactive interface appears. Here you can choose either to apply the config to your system, or take a snapshot from the system and put it in your config
+
+### The TUI
+
+With Python 3.12+ available, plain `tt` opens a full-screen TUI (`tt` sets up
+its own virtualenv on first use). It shows a dashboard with what's out of
+sync, and screens for packages and files:
+
+- **Packages** — every package with its status (`OK` installed, `!!` missing,
+  `++` installed but untracked, `D` a dependency of something else). Install
+  and uninstall inline, move packages between configs, and mark rows with
+  `Space` to apply an action to several at once. An uninstall is checked
+  against the real dependency graph first, so you can't break another package
+  by accident.
+- **Files** — tracked files with diffs against what's on disk, and per-file
+  decisions about which side wins.
+
+Without a suitable Python, `tt` falls back to the classic text menu described
+below; that menu is also still reachable via `tt --admin`.
+
+### Command line
+
+```bash
+tt                    # interactive TUI (classic menu as fallback)
+tt --syncSys          # full sync: packages, files, local_install.sh
+tt --syncFilesOnly    # only files
+tt --updateToolTamer  # snapshot installed packages into the config
+tt --admin            # admin menu
+tt --fix-taps         # qualify tap packages (see to_install.XXX below)
+tt --cleanup-deps     # drop packages that are only there as dependencies
+tt -h
+```
+
+`--fix-taps` and `--cleanup-deps` only report by default; add `--apply` to
+actually change your config, which asks for confirmation first.
 
 ### Menu Options 
 
@@ -144,6 +183,11 @@ ToolTamer looks for a directory in it`s config directory named as the hostname f
 - `includes.conf`: ToolTamer supports an easy hierachy, you can define hostnames / directories to include into your config. 
 - `local_install.sh`: This script will be run _every time_ tt is run on that machine.
 - `files.conf`: configuration file telling tt where to put the files found in the `files` subdirectory.
+- `taps` (macOS): additional Homebrew taps to add, one per line.
+
+There is also a generated `cache/` directory next to `configs/`. It holds
+machine-local dependency data to keep repeated runs fast and should **not** be
+committed — add `cache/` to your config repo's `.gitignore`.
 
 There is one special directory called `common`. This contains files / configurations that are included by all other configurations.
 in common there might be all files listed above, or just one of them. Depending on your setup 
@@ -205,5 +249,16 @@ Comparison is done using `SHA` Checksums!
 
 
 ### to_install.XXX
-The `to_install` files just contain a list of package names to be ensured on the system. Everything that is installed on the system, that is not a dependency or a lib that is not in that list, will be uninstalled / purged. This way, whenever you try out a tool and forget to uninstall it, ToolTamer will help you with that.
+The `to_install` files just contain a list of package names to be ensured on the system. Anything installed that is *not* in the list and that no other installed package depends on will be uninstalled / purged. This way, whenever you try out a tool and forget to uninstall it, ToolTamer will help you with that.
+
+Packages that something else still needs are kept and reported — they are
+*not* written back into your config, since that dependency is re-checked on
+every run anyway.
+
+**Packages from third-party Homebrew taps belong in the list fully
+qualified**, e.g. `forketyfork/tap/clawtunes` rather than `clawtunes`. The
+short name only resolves on a machine where the tap has already been added,
+whereas `brew install user/repo/formula` adds the tap automatically — so the
+qualified form is what makes the package installable on a fresh host. Run
+`tt --fix-taps` to find and rewrite entries that need it.
 

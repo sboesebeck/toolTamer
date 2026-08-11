@@ -17,15 +17,21 @@
 
 === "Linux (Debian/Ubuntu)"
 
-    `apt` is used by default. For dependency-aware uninstalls, install `apt-rdepends`:
-
-    ```bash
-    sudo apt install apt-rdepends
-    ```
+    `apt` is used by default. Nothing extra to install — dependency-aware
+    uninstalls use `apt-cache`, which ships with apt itself.
 
 === "Linux (Arch)"
 
-    `pacman` is supported but not heavily tested yet.
+    `pacman` is supported but not heavily tested yet. Uninstalling is not
+    implemented for pacman; unlisted packages are reported but left alone.
+
+### Python (for the TUI and the helper tools)
+
+**Python 3.12+** is required for the interactive TUI and the `--fix-taps` /
+`--cleanup-deps` tools. `tt` sets up its own virtual environment on first
+use, so there is nothing to install by hand. Without a suitable Python,
+`tt` falls back to the classic text menu and the helper tools are
+unavailable.
 
 ### Optional Tools
 

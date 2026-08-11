@@ -2,7 +2,7 @@
 
 **Cross-platform system configuration and package synchronization.**
 
-ToolTamer is a Bash tool that automates installation, synchronization, and cleanup of tools and configuration files across multiple systems. It uses your existing package manager — **Homebrew** on macOS, **apt** or **pacman** on Linux — and stores everything in a Git-backed configuration repository.
+ToolTamer automates installation, synchronization, and cleanup of tools and configuration files across multiple systems. It uses your existing package manager — **Homebrew** on macOS, **apt** or **pacman** on Linux — and stores everything in a Git-backed configuration repository. A Bash engine does the syncing; an interactive TUI (Python/Textual) sits on top, both reachable through the single `tt` command.
 
 ## Why ToolTamer?
 
@@ -20,8 +20,9 @@ ToolTamer handles both: it installs missing packages, removes unlisted ones, and
 - **Cross-platform** — works on macOS (Homebrew), Linux (apt, pacman).
 - **Hierarchical configuration** — common base config inherited by all hosts, with host-specific overrides.
 - **Git-backed** — your entire configuration lives in a Git repo, shareable across machines.
-- **Interactive menus** — fzf-powered menus with fallback to numbered selection.
-- **Dependency-aware** — won't accidentally uninstall packages that are dependencies of others.
+- **Interactive TUI** — full-screen package and file browser with diffs, bulk actions and inline install/uninstall; falls back to fzf-powered or numbered menus when Python 3.12+ isn't available.
+- **Dependency-aware** — won't uninstall a package another installed package still needs. The check queries the package manager for real (no name guessing) and is cached, so repeated runs stay fast.
+- **Tap-aware** — Homebrew packages from third-party taps are stored fully qualified, so they install on a fresh machine without adding the tap first.
 
 ## Quick Overview
 
