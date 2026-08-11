@@ -30,8 +30,7 @@
 **Python 3.12+** is required for the interactive TUI and the `--fix-taps` /
 `--cleanup-deps` tools. `tt` sets up its own virtual environment on first
 use, so there is nothing to install by hand. Without a suitable Python,
-`tt` falls back to the classic text menu and the helper tools are
-unavailable.
+`tt` cannot start its interface and the helper tools are unavailable.
 
 ### Optional Tools
 

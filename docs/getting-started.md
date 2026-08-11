@@ -40,22 +40,12 @@ per-file choice of which version wins.
 
 ![The file manager screen](img/files.svg)
 
-Everything below is also available from the command line — see
-[Command line](#command-line).
+Every screen lists its keys in the footer. Everything is also available from
+the command line — see [Command line](#command-line).
 
-## The Classic Menu
+## What the actions do
 
-Without a suitable Python, `tt` falls back to the text menu (also reachable
-via `tt --admin`):
-
-```
------> ToolTamer V1.0 - main menu
-1. Update System - full system update, local files, installation, local install script
-2. Files only - update only files
-3. Snapshot System
-4. Admin
-5. Quit
-```
+The dashboard actions (and their command-line equivalents) are:
 
 ### Update System
 
@@ -84,11 +74,10 @@ This is useful when you've set up a new machine manually and want to capture tha
 Everything can be driven without the interactive interface:
 
 ```bash
-tt                    # interactive TUI (classic menu as fallback)
+tt                    # interactive TUI
 tt --syncSys          # full sync: packages, files, local_install.sh
 tt --syncFilesOnly    # only files
 tt --updateToolTamer  # snapshot installed packages into the config
-tt --admin            # admin menu
 tt --fix-taps         # qualify third-party-tap package names
 tt --cleanup-deps     # drop packages only listed because something depends on them
 tt -h

@@ -55,7 +55,7 @@ It comes as a Bash sync engine (`bin/`) plus an interactive TUI and helper tools
 - **Git**: Ensure Git is installed to clone repositories and manage configurations.
 - **Python 3.12+** (optional): needed for the interactive TUI and the
   `--fix-taps` / `--cleanup-deps` helpers. `tt` creates its own virtualenv on
-  first use; without a suitable Python it falls back to the classic text menu.
+  first use.
 
 ## Installation
 
@@ -112,17 +112,13 @@ sync, and screens for packages and files:
 - **Files** — tracked files with diffs against what's on disk, and per-file
   decisions about which side wins.
 
-Without a suitable Python, `tt` falls back to the classic text menu described
-below; that menu is also still reachable via `tt --admin`.
-
 ### Command line
 
 ```bash
-tt                    # interactive TUI (classic menu as fallback)
+tt                    # interactive TUI
 tt --syncSys          # full sync: packages, files, local_install.sh
 tt --syncFilesOnly    # only files
 tt --updateToolTamer  # snapshot installed packages into the config
-tt --admin            # admin menu
 tt --fix-taps         # qualify tap packages (see to_install.XXX below)
 tt --cleanup-deps     # drop packages that are only there as dependencies
 tt -h

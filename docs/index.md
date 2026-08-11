@@ -45,7 +45,6 @@ Run `tt` to get an interactive menu, or use CLI flags for automation:
 ```bash
 tt --syncSys              # Apply config to system
 tt --updateToolTamer      # Snapshot system into config
-tt --admin                # Advanced management
 ```
 
 ## Getting Started
