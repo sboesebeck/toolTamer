@@ -257,10 +257,22 @@ class FileScreen(Screen):
             "missing": ("Not cloned yet — 'a' clones it.", "red"),
             "not_a_repo": ("Path exists but is not a git repository root.", "bold red"),
             "wrong_origin": ("origin differs from .ttgit — sync skips this repo.", "bold red"),
+            "wrong_branch": ("A different branch is checked out — sync skips this repo.", "bold red"),
             "invalid_spec": (".ttgit has no url.", "bold red"),
         }
         text, style = descriptions.get(state, (f"Unknown state: {state}", "red"))
         lines.append((f"Status: {state} — {text}", style))
+
+        if state == "wrong_branch":
+            head = repo_mod.current_branch(sys_path)
+            lines.append((
+                f"  on {head or 'a detached HEAD'}, .ttgit names {spec.branch}",
+                "bold red",
+            ))
+            lines.append((
+                f"  check out {spec.branch} here, or press 'u' to record the "
+                f"branch you are on", "dim",
+            ))
 
         if state in ("missing", "invalid_spec"):
             return lines

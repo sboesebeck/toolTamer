@@ -995,3 +995,19 @@ def test_repo_detail_lines_say_nothing_when_only_the_marker_is_stored(tmp_path: 
     )
     text = "\n".join(t for t, _ in lines)
     assert "ignored" not in text.lower()
+
+
+def test_repo_detail_lines_name_both_branches_on_a_mismatch(tmp_path: Path, monkeypatch):
+    """I4: "Diverged from the remote — sync skips this repo" described
+    something that never happened. The pane must say which branch is checked
+    out and which the marker names."""
+    monkeypatch.setattr(repo_mod, "status", lambda *a, **k: "wrong_branch")
+    monkeypatch.setattr(repo_mod, "current_branch", lambda *a, **k: "wip")
+
+    lines = FileScreen._repo_detail_lines(
+        RepoSpec(url="git@example.com:me/r.git", branch="main"), tmp_path
+    )
+    text = "\n".join(t for t, _ in lines)
+    assert "wrong_branch" in text
+    assert "wip" in text
+    assert "main" in text

@@ -655,3 +655,63 @@ def test_capture_dir_from_system_skips_when_sysdir_is_unreadable(tmp_path: Path)
     assert (store / "init.lua").read_text() == "-- old content\n"
     summary = _summary(tmp_path).lower()
     assert "skip" in summary
+
+
+# --- I4: the marker's branch is never enforced ----------------------------
+
+
+def test_sync_repo_refuses_force_reset_on_a_branch_the_marker_never_named(
+    tmp_path: Path, origin_repo: Path
+):
+    """I4: `git pull --ff-only` and `git reset --hard origin/<marker branch>`
+    both act on whatever branch is checked out, while ahead/behind is
+    computed against origin/<marker branch>. A user on a side branch was
+    therefore permanently reported as diverged — and with force = true the
+    reset ran on that side branch, orphaning their commits."""
+    store = tmp_path / "store"
+    make_marker(store, str(origin_repo), force=True)
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+    _git(target, "config", "user.email", "t@example.com")
+    _git(target, "config", "user.name", "Test")
+    _git(target, "checkout", "--quiet", "-b", "wip")
+    (target / "my_work.txt").write_text("hours of it\n")
+    _git(target, "add", "my_work.txt")
+    _git(target, "commit", "--quiet", "-m", "my work")
+
+    # move origin/main ahead, so ahead>0 and behind>0 and the force branch
+    # of syncRepoToSystem is the one that runs
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "t@example.com")
+    _git(other, "config", "user.name", "Test")
+    (other / "remote.txt").write_text("remote\n")
+    _git(other, "add", "remote.txt")
+    _git(other, "commit", "--quiet", "-m", "remote")
+    _git(other, "push", "--quiet", "origin", "main")
+
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert (target / "my_work.txt").read_text() == "hours of it\n"
+    summary = _summary(tmp_path)
+    assert "branch" in summary
+    assert "Reset repo" not in summary
+
+
+def test_sync_repo_syncs_normally_when_head_matches_the_marker_branch(
+    tmp_path: Path, origin_repo: Path
+):
+    """Parity guard for the check above: it must not fire on the happy path."""
+    store = tmp_path / "store"
+    make_marker(store, str(origin_repo), force=True)
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+    (target / "junk.txt").write_text("junk\n")
+
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert not (target / "junk.txt").exists()
+    assert "Reset repo" in _summary(tmp_path)

@@ -409,6 +409,24 @@ function syncRepoToSystem() {
     return 1
   fi
 
+  # I4: everything below compares against origin/$branch, while `pull
+  # --ff-only` and `reset --hard` act on whatever branch is checked out. A
+  # user on a side branch was therefore permanently reported as diverged,
+  # and with force = true the reset ran on that side branch and orphaned
+  # their commits. Refuse instead; checking out $branch for them would
+  # discard the context they are working in without asking. Same check, same
+  # position, in tui/core/repo.py's status()/sync_to_system.
+  if [ -n "$branch" ]; then
+    local head_branch
+    head_branch=$(git -C "$sysdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [ "$head_branch" != "$branch" ]; then
+      log "${RD}branch mismatch${RESET} ($head_branch) - skipped"
+      warn "$sysdir is on branch $head_branch but .ttgit names $branch - not touched (check out $branch, or update the marker)"
+      note "Skipped repo (branch mismatch)" "$sysdir"
+      return 1
+    fi
+  fi
+
   if ! git -C "$sysdir" fetch --quiet origin 2>/dev/null; then
     log "${YL}remote unreachable${RESET}"
     note "Repo unreachable" "$sysdir ($url)"

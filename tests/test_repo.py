@@ -418,3 +418,80 @@ def test_sync_to_system_never_moves_aside_a_repo_that_lost_its_origin(
     assert "origin" in result.message
     assert (clone_without_origin / "work_in_progress.txt").read_text() == "precious\n"
     assert not clone_without_origin.with_name(clone_without_origin.name + ".ttbak").exists()
+
+
+# --- I4: the marker's branch is never enforced ----------------------------
+
+
+@pytest.fixture
+def clone_on_side_branch(tmp_path: Path, clone: Path, origin_repo: Path) -> Path:
+    """The user is on `wip` with a commit of their own; the marker says
+    `main`, and origin/main has moved ahead."""
+    _run(clone, "git", "checkout", "--quiet", "-b", "wip")
+    (clone / "my_work.txt").write_text("hours of it\n")
+    _run(clone, "git", "add", "my_work.txt")
+    _run(clone, "git", "commit", "--quiet", "-m", "my work")
+    _push_remote_commit(tmp_path, origin_repo)
+    _run(clone, "git", "fetch", "--quiet", "origin")
+    return clone
+
+
+def test_status_reports_a_branch_mismatch_instead_of_diverged(clone_on_side_branch: Path, origin_repo: Path):
+    """I4: ahead/behind is computed against origin/<marker branch>, so a
+    user sitting on a side branch was permanently `diverged` — with a detail
+    pane saying "Diverged from the remote", which is not what happened."""
+    from tui.core.repo import status
+
+    spec = RepoSpec(url=str(origin_repo), branch="main")
+    assert status(clone_on_side_branch, spec) == "wrong_branch"
+
+
+def test_wrong_branch_has_a_bucket(clone_on_side_branch: Path):
+    from tui.core.repo import classify
+
+    assert classify("wrong_branch") == "broken"
+
+
+def test_status_is_not_wrong_branch_when_the_marker_names_no_branch(
+    clone_on_side_branch: Path, origin_repo: Path
+):
+    """No `branch` in the marker means "whatever is checked out" — there is
+    nothing to mismatch."""
+    from tui.core.repo import status
+
+    assert status(clone_on_side_branch, RepoSpec(url=str(origin_repo))) != "wrong_branch"
+
+
+def test_sync_refuses_the_force_reset_on_a_branch_the_marker_never_named(
+    clone_on_side_branch: Path, origin_repo: Path
+):
+    """The destructive half of I4: with force = true, sync ran
+    `git reset --hard origin/main` *while on wip*, orphaning the user's
+    commits, and then `git clean -fd`."""
+    from tui.core.repo import sync_to_system
+
+    spec = RepoSpec(url=str(origin_repo), branch="main", force=True)
+    result = sync_to_system(clone_on_side_branch, spec)
+
+    assert result.action == "skipped"
+    assert "wip" in result.message and "main" in result.message
+    assert (clone_on_side_branch / "my_work.txt").read_text() == "hours of it\n"
+    _, head = _read_head(clone_on_side_branch)
+    assert head == "wip"
+
+
+def _read_head(path: Path) -> tuple[int, str]:
+    import subprocess as _sp
+    proc = _sp.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                   cwd=path, capture_output=True, text=True)
+    return proc.returncode, proc.stdout.strip()
+
+
+def test_sync_refuses_the_force_reset_on_a_detached_head(clone: Path, origin_repo: Path):
+    from tui.core.repo import sync_to_system
+
+    _run(clone, "git", "checkout", "--quiet", "--detach", "HEAD")
+    result = sync_to_system(clone, RepoSpec(url=str(origin_repo), branch="main", force=True))
+
+    assert result.action == "skipped"
+    assert "main" in result.message

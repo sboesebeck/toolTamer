@@ -161,14 +161,15 @@ RepoStatus = str  # one of the nine literals documented in the plan/spec
 
 ALL_STATUSES = (
     "ok", "ahead", "behind", "dirty", "diverged",
-    "missing", "not_a_repo", "wrong_origin", "invalid_spec",
+    "missing", "not_a_repo", "wrong_origin", "wrong_branch", "invalid_spec",
 )
 
 _BUCKETS = {
     "ok": "synced", "ahead": "synced",
     "behind": "changed", "dirty": "changed", "diverged": "changed",
     "missing": "missing",
-    "not_a_repo": "broken", "wrong_origin": "broken", "invalid_spec": "broken",
+    "not_a_repo": "broken", "wrong_origin": "broken",
+    "wrong_branch": "broken", "invalid_spec": "broken",
 }
 
 
@@ -232,6 +233,14 @@ def status(system_path: Path, spec: RepoSpec, fetch: bool = False) -> RepoStatus
     # the value that authorises sync_to_system to move the tree aside.
     if origin_url(system_path) != spec.url:
         return "wrong_origin"
+    # I4: everything below compares against origin/<spec.branch>, while pull
+    # and reset act on whatever is checked out. Sitting on a side branch made
+    # a repo permanently "diverged" — a description of something that never
+    # happened — and authorised `git reset --hard origin/<spec.branch>` on a
+    # branch the marker never named. Its own state, ranked with the other
+    # "this working copy is not what the marker describes" answers.
+    if spec.branch and current_branch(system_path) != spec.branch:
+        return "wrong_branch"
     if fetch:
         _git(["fetch", "--quiet", "origin"], cwd=system_path)
     rc, porcelain = _git(["status", "--porcelain"], cwd=system_path)
@@ -305,6 +314,20 @@ def sync_to_system(system_path: Path, spec: RepoSpec) -> SyncResult:
     # all, cannot possibly succeed).
     if origin_url(system_path) != spec.url:
         return SyncResult("skipped", f"{system_path}: origin differs from .ttgit ({spec.url})")
+
+    # I4: refuse before the fetch, and long before the force reset. Checking
+    # out spec.branch on the user's behalf would discard the context they are
+    # working in without asking; saying which branch is checked out and which
+    # the marker names lets them choose (checkout, or `u` to record where they
+    # are). Mirrors the same check in syncRepoToSystem.
+    if spec.branch:
+        head = current_branch(system_path)
+        if head != spec.branch:
+            return SyncResult(
+                "skipped",
+                f"{system_path}: on {head or 'a detached HEAD'} but .ttgit names "
+                f"{spec.branch} — not touched",
+            )
 
     # R30: status()'s own fetch=True discards git fetch's exit code, so an
     # unreachable remote (no network, origin gone) fell through to whatever
