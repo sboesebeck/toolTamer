@@ -38,6 +38,38 @@ def iter_tree_files(root: Path):
                 yield p.relative_to(root).as_posix(), p
 
 
+def dir_fully_readable(root: Path) -> bool:
+    """True when every file under `root` can be enumerated.
+
+    The Python counterpart of dirFullyReadable() in bin/include.sh, and it
+    exists for the same reason: a mirror that cannot see part of its source
+    treats the unseen files as "extra" on the destination and deletes them.
+    Refusing outright is the only safe answer.
+
+    It lives here, next to iter_tree_files, precisely because that function
+    is the blind spot it covers: os.walk() reports scandir failures to its
+    `onerror` hook and otherwise pretends the unreadable directory is empty,
+    so every iter_tree_files-based check (tree_hash, dir_diff, _dir_deletions)
+    silently under-reports. This is the one place that passes `onerror`.
+    config.py has no Textual dependency, so screens, the sync paths and tests
+    can all reach it.
+    """
+    if not root.is_dir():
+        return False
+    if not os.access(root, os.R_OK | os.X_OK):
+        return False
+    failed = False
+
+    def _onerror(_exc: OSError) -> None:
+        nonlocal failed
+        failed = True
+
+    for _dirpath, _dirnames, _filenames in os.walk(root, onerror=_onerror, followlinks=False):
+        if failed:
+            return False
+    return not failed
+
+
 def _entry_fingerprint(path: Path) -> str:
     if path.is_symlink():
         return "link:" + os.readlink(path)

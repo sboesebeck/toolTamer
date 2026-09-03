@@ -22,7 +22,7 @@ from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
 from tui.core import repo as repo_mod
-from tui.core.config import TTConfig, dir_diff, tree_hash, tree_signature
+from tui.core.config import TTConfig, dir_diff, dir_fully_readable, tree_hash, tree_signature
 from tui.core.diff_render import render_changed_diffs
 from tui.core.repo import RepoSpec
 from tui.core.system import SystemInfo
@@ -596,6 +596,20 @@ class FileScreen(Screen):
             self._refresh_files()
             self._show_diff(config, stored, target)
             return
+        if repo_file.is_dir() and not dir_fully_readable(repo_file):
+            # C1: the os.access() check above only sees the top level. A store
+            # dir that is readable there but holds an unreadable subdirectory
+            # gets past it, and then rmtree(sys_file) succeeds before
+            # copytree() raises shutil.Error on the subtree it cannot read —
+            # the system side is left half-deleted. bin/include.sh puts the
+            # same guard in mirrorDir, i.e. on the mirror path only; repo
+            # entries return above and never reach it, exactly as they never
+            # reach mirrorDir.
+            self.notify(
+                f"Cannot fully read {repo_file} — unreadable subdirectory, skipped",
+                severity="error", timeout=8,
+            )
+            return
         if repo_file.is_dir():
             sys_file.parent.mkdir(parents=True, exist_ok=True)
             if sys_file.exists():
@@ -734,6 +748,16 @@ class FileScreen(Screen):
         else:
             dest_config = config
             dest_path = self._tt_config.configs_dir / config / "files" / stored
+        if sys_path.is_dir() and not dir_fully_readable(sys_path):
+            # C1, capture direction: the store is the one that gets rmtree'd
+            # here, so an unreadable subtree on the system side would empty
+            # the stored copy and then fail. Same refusal as mirrorDir.
+            self.notify(
+                f"Cannot fully read {sys_path} — unreadable subdirectory, "
+                f"stored copy left untouched",
+                severity="error", timeout=8,
+            )
+            return
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         if sys_path.is_dir():
             if dest_path.exists():
@@ -810,6 +834,15 @@ class FileScreen(Screen):
         if not src_path.exists():
             return
         dest_path = self._tt_config.configs_dir / host / "files" / stored
+        if src_path.is_dir() and not dir_fully_readable(src_path):
+            # C1, store-to-store direction: the host config's copy is the
+            # victim of the rmtree below.
+            self.notify(
+                f"Cannot fully read {src_path} — unreadable subdirectory, "
+                f"local override left untouched",
+                severity="error", timeout=8,
+            )
+            return
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         if src_path.is_dir():
             if dest_path.exists():

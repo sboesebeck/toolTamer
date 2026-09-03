@@ -681,3 +681,139 @@ async def test_convert_to_repo_converts_the_store_after_confirmation(tmp_path: P
     # System side is never touched by conversion.
     assert (target / "init.lua").read_text() == "-- copied\n"
     assert (target / ".git").exists()
+
+
+# --- C1: recursive readability guard on every rmtree+copytree pair ---------
+
+import os
+
+
+class _FakeLog:
+    """Stand-in for the #file-diff RichLog in non-Textual unit tests."""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def clear(self) -> None:
+        self.lines.clear()
+
+    def write(self, text) -> None:
+        self.lines.append(getattr(text, "plain", str(text)))
+
+
+def _bare_screen(tmp_config: Path, notifications: list[str]) -> FileScreen:
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+    screen._system = SystemInfo()
+    screen._tree_cache = {}
+    screen._refresh_files = lambda: None
+    screen._show_diff = lambda *a, **k: None
+    screen.notify = lambda msg, *a, **k: notifications.append(msg)
+    screen.query_one = lambda *a, **k: _FakeLog()
+    return screen
+
+
+def _tree_with_unreadable_subdir(root: Path) -> None:
+    """top.lua readable, sub/ at mode 000 — readable at the top, not below."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "top.lua").write_text("-- top\n")
+    sub = root / "sub"
+    sub.mkdir()
+    (sub / "deep.lua").write_text("-- deep\n")
+    os.chmod(sub, 0o000)
+
+
+def test_do_apply_refuses_when_a_store_subdirectory_is_unreadable(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    """C1: bin/include.sh's dirFullyReadable refuses a source that cannot be
+    fully *enumerated*; Python only ever checked the top level.
+
+    A store dir readable at the top but holding a mode-000 subdirectory
+    passes os.access(R_OK|X_OK), so _do_apply fell through to
+    rmtree(sys_file) + copytree(repo_file, sys_file) — and copytree raises
+    shutil.Error on the unreadable subtree *after* rmtree already deleted
+    the destination. Net effect: the system's sub/deep.lua is gone."""
+    home = tmp_path / "home"
+    target = home / ".config" / "nvim"
+    _tree_with_unreadable_subdir(target)
+    os.chmod(target / "sub", 0o755)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    _tree_with_unreadable_subdir(store)
+
+    try:
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        notifications: list[str] = []
+        screen = _bare_screen(tmp_config, notifications)
+
+        screen._do_apply("testhost", "nvim", ".config/nvim")
+
+        assert (target / "sub" / "deep.lua").read_text() == "-- deep\n"
+        assert sorted(p.name for p in target.iterdir()) == ["sub", "top.lua"]
+        assert any("read" in m for m in notifications), notifications
+    finally:
+        os.chmod(store / "sub", 0o755)
+
+
+def test_do_capture_refuses_when_a_system_subdirectory_is_unreadable(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    """C1, capture direction: here the *store* is the victim of the
+    rmtree+copytree pair, and the unreadable subtree is on the system."""
+    home = tmp_path / "home"
+    sys_dir = home / ".config" / "nvim"
+    _tree_with_unreadable_subdir(sys_dir)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    (store / "top.lua").write_text("-- stored top\n")
+    (store / "sub").mkdir()
+    (store / "sub" / "deep.lua").write_text("-- stored deep\n")
+
+    try:
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        notifications: list[str] = []
+        screen = _bare_screen(tmp_config, notifications)
+
+        screen._do_capture("testhost", "nvim", ".config/nvim", "parent")
+
+        assert (store / "sub" / "deep.lua").read_text() == "-- stored deep\n"
+        assert any("read" in m for m in notifications), notifications
+    finally:
+        os.chmod(sys_dir / "sub", 0o755)
+
+
+def test_do_override_from_repo_refuses_when_source_store_is_unreadable(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    """C1, store-to-store direction: _do_override_from_repo rmtrees the host
+    config's copy before copytree-ing the parent config's — same trap."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+
+    common = tmp_config / "configs" / "common"
+    (common / "files.conf").write_text("nvim;.config/nvim\n")
+    src = common / "files" / "nvim"
+    _tree_with_unreadable_subdir(src)
+
+    host = tmp_config / "configs" / "testhost"
+    dest = host / "files" / "nvim"
+    dest.mkdir(parents=True)
+    (dest / "keepme.lua").write_text("-- local override\n")
+
+    try:
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        notifications: list[str] = []
+        screen = _bare_screen(tmp_config, notifications)
+
+        screen._do_override_from_repo("common", "nvim", ".config/nvim")
+
+        assert (dest / "keepme.lua").read_text() == "-- local override\n"
+        assert any("read" in m for m in notifications), notifications
+    finally:
+        os.chmod(src / "sub", 0o755)

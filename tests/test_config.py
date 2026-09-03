@@ -300,3 +300,60 @@ def test_convert_to_repo_keeps_the_files_conf_entry(tmp_config: Path):
     cfg.convert_to_repo("testhost", "nvim", RepoSpec(url="u", branch="main"))
 
     assert cfg.get_file_mappings("testhost") == [("nvim", ".config/nvim")]
+
+
+# --- C1: recursive readability check --------------------------------------
+
+def test_dir_fully_readable_accepts_a_readable_tree(tmp_path: Path):
+    from tui.core.config import dir_fully_readable
+
+    root = tmp_path / "tree"
+    (root / "sub").mkdir(parents=True)
+    (root / "top.txt").write_text("t\n")
+    (root / "sub" / "deep.txt").write_text("d\n")
+    assert dir_fully_readable(root) is True
+
+
+def test_dir_fully_readable_rejects_an_unreadable_top_level(tmp_path: Path):
+    import os
+    from tui.core.config import dir_fully_readable
+
+    root = tmp_path / "tree"
+    root.mkdir()
+    (root / "top.txt").write_text("t\n")
+    os.chmod(root, 0o000)
+    try:
+        assert dir_fully_readable(root) is False
+    finally:
+        os.chmod(root, 0o755)
+
+
+def test_dir_fully_readable_rejects_an_unreadable_subdirectory(tmp_path: Path):
+    """The half iter_tree_files cannot see: os.walk swallows the scandir
+    failure and reports the subtree as empty, so every check built on it
+    (tree_hash, dir_diff, _dir_deletions) silently under-reports. This is
+    the parity check against bin/include.sh's dirFullyReadable, which
+    refuses on any `find` stderr."""
+    import os
+    from tui.core.config import dir_fully_readable, iter_tree_files
+
+    root = tmp_path / "tree"
+    (root / "sub").mkdir(parents=True)
+    (root / "top.txt").write_text("t\n")
+    (root / "sub" / "deep.txt").write_text("d\n")
+    os.chmod(root / "sub", 0o000)
+    try:
+        # iter_tree_files sees only top.txt and reports no problem at all
+        assert sorted(rel for rel, _ in iter_tree_files(root)) == ["top.txt"]
+        assert dir_fully_readable(root) is False
+    finally:
+        os.chmod(root / "sub", 0o755)
+
+
+def test_dir_fully_readable_rejects_a_missing_or_non_directory_path(tmp_path: Path):
+    from tui.core.config import dir_fully_readable
+
+    assert dir_fully_readable(tmp_path / "nope") is False
+    f = tmp_path / "file.txt"
+    f.write_text("x\n")
+    assert dir_fully_readable(f) is False
