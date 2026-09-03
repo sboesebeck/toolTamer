@@ -21,3 +21,4 @@ include = ["tui*"]
 tt-tui = "tui.app:main"
 tt-cleanup-deps = "tui.cleanup_deps:main"
 tt-fix-taps = "tui.fix_taps:main"
+tt-warm-deps = "tui.warm_deps:main"
