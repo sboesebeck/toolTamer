@@ -6,6 +6,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from tui.core.repo import RepoSpec, read_marker
+
 
 def _resolve_effective_target(stored: str, target: str) -> str:
     """Mirror include.sh's target resolution: when target ends with '/', the
@@ -97,6 +99,15 @@ class FileMapping:
     @property
     def effective_target(self) -> str:
         return _resolve_effective_target(self.stored, self.target)
+
+    @property
+    def repo(self) -> RepoSpec | None:
+        """The clone spec when this entry is a git-repo entry, else None."""
+        return read_marker(self.repo_path)
+
+    @property
+    def is_repo(self) -> bool:
+        return self.repo is not None
 
 
 class TTConfig:

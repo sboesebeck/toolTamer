@@ -176,3 +176,28 @@ def test_get_children(tmp_config: Path):
     cfg = TTConfig(tmp_config)
     children = cfg.get_children("macosx")
     assert "testhost" in children
+
+
+def test_file_mapping_without_marker_is_not_a_repo(tmp_config: Path):
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("kitty.conf;.config/kitty/kitty.conf\n")
+    cfg = TTConfig(tmp_config)
+    m = next(m for m in cfg.get_effective_file_mappings("testhost")
+             if m.stored == "kitty.conf")
+    assert m.is_repo is False
+    assert m.repo is None
+
+
+def test_file_mapping_with_marker_is_a_repo(tmp_config: Path):
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    (store / ".ttgit").write_text("url = git@example.com:me/nvim.git\nbranch = main\n")
+    cfg = TTConfig(tmp_config)
+    m = next(m for m in cfg.get_effective_file_mappings("testhost")
+             if m.stored == "nvim")
+    assert m.is_repo is True
+    assert m.repo is not None
+    assert m.repo.url == "git@example.com:me/nvim.git"
+    assert m.repo.branch == "main"
