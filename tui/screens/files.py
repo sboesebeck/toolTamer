@@ -542,9 +542,21 @@ class FileScreen(Screen):
     def _do_apply(self, config: str, stored: str, target: str) -> None:
         import shutil
         from tui.core.config import _resolve_effective_target
+        from tui.core.repo import read_marker, sync_to_system
         repo_file = self._tt_config.configs_dir / config / "files" / stored
         sys_file = Path.home() / _resolve_effective_target(stored, target)
         if not repo_file.exists():
+            return
+        spec = read_marker(repo_file)
+        if spec is not None:
+            # A repo entry is synced with clone/pull, never mirrored via
+            # rmtree+copytree — that would destroy the user's real repo
+            # (and any uncommitted work in it) below.
+            result = sync_to_system(sys_file, spec)
+            severity = {"failed": "error", "skipped": "warning"}.get(result.action, "information")
+            self.notify(result.message, severity=severity, timeout=8)
+            self._refresh_files()
+            self._show_diff(config, stored, target)
             return
         if repo_file.is_dir():
             sys_file.parent.mkdir(parents=True, exist_ok=True)

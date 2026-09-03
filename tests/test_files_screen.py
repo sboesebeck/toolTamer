@@ -246,3 +246,41 @@ async def test_broken_repo_states_render_red_not_yellow(tmp_path: Path, monkeypa
     style = str(st_text.spans[0].style) if st_text.spans else ""
     assert "red" in style
     assert "yellow" not in style
+
+
+def test_do_apply_never_deletes_a_repo_target(tmp_config: Path, tmp_path: Path, monkeypatch):
+    """Regression: the directory branch of _do_apply used to rmtree the
+    target unconditionally, which would wipe a tracked repo.
+
+    Ruling R3: the origin is a local filesystem path, never git@.../ssh://...
+    — sync_to_system's status(fetch=True) runs a real `git fetch`, and a
+    real remote URL would attempt a network connection."""
+    home = tmp_path / "home"
+    target = home / ".config" / "nvim"
+    target.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", "--initial-branch=main"],
+                   cwd=target, check=True, capture_output=True)
+    origin = str(tmp_path / "no-such-origin.git")
+    subprocess.run(["git", "remote", "add", "origin", origin],
+                   cwd=target, check=True, capture_output=True)
+    (target / "work_in_progress.lua").write_text("-- precious\n")
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    (store / ".ttgit").write_text(f"url = {origin}\nbranch = main\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+    screen._tree_cache = {}
+    screen._refresh_files = lambda: None
+    screen._show_diff = lambda *a, **k: None
+    screen.notify = lambda *a, **k: None
+
+    screen._do_apply("testhost", "nvim", ".config/nvim")
+
+    assert (target / "work_in_progress.lua").read_text() == "-- precious\n"
+    assert (target / ".git").exists()
