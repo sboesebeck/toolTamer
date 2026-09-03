@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - `bin/tt` is the primary entry point; it sources `bin/include.sh` for shared helpers, inspects `$HOME/.config/toolTamer`, and runs the menu flow. It also bootstraps `.venv` and dispatches to the Python tools.
 - `bin/admin.sh` houses maintenance helpers (moving files, deduping packages) and depends on the environment bootstrapped by `tt`.
-- `tui/` is the Python/Textual half: the interactive TUI plus the helper tools (`tui/cleanup_deps.py`, `tui/fix_taps.py`). Core logic in `tui/core/`, screens in `tui/screens/`, widgets in `tui/widgets/`.
+- `tui/` is the Python/Textual half: the interactive TUI plus the helper tools (`tui/cleanup_deps.py`, `tui/fix_taps.py`, `tui/warm_deps.py`). Core logic in `tui/core/`, screens in `tui/screens/`, widgets in `tui/widgets/`.
 - `tests/` holds the pytest suite covering the Python half.
 - Configuration data never lives in this repo: scripts expect host-specific directories under `~/.config/toolTamer/configs/` (override with `TT_BASE`).
 - `README.md` documents onboarding; keep contributor-facing nuggets there and cross-reference this guide when updating flows.
@@ -11,6 +11,7 @@
 ## Build, Test, and Development Commands
 - `./bin/tt` — run the tool end-to-end; pass `-sh` to print the PATH export snippet for shell integration.
 - `./bin/tt --fix-taps` / `--cleanup-deps` — config audit tools; both dry-run unless `--apply` is given, and pass further arguments through.
+- `./bin/tt --warm-deps` — fill the reverse-dependency cache with the set a sync needs, in parallel. `--syncSys` runs this itself; the standalone command just pays the cost up front.
 - `./bin/admin.sh` — open the Admin menu for moving files, deduping package lists, or inspecting configs.
 - `TT_BASE=/tmp/tt-test ./bin/tt` — target a disposable config sandbox.
 - `source .venv/bin/activate && python -m pytest -q` — run the test suite.

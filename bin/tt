@@ -143,6 +143,9 @@ Options
                     where the tap isn't set up yet. Dry-run unless --apply is given.
   --cleanup-deps    Remove packages from the configs that are only there because
                     something else depends on them. Dry-run unless --apply is given.
+  --warm-deps       Pre-compute the reverse-dependency data a sync needs into the
+                    shared cache, in parallel. --syncSys does this by itself; run it
+                    separately to pay the cost ahead of time.
   -h, --help        Show this help text and exit.
 
 --fix-taps and --cleanup-deps pass any further arguments through, e.g.
@@ -366,6 +369,57 @@ function updatePackageManager() {
   return 0
 }
 
+# Pre-compute the reverse-dependency answers the loop in syncInstall()
+# below is about to ask for, one slow package-manager call at a time.
+#
+# depCount() reads $BASE/cache/reverse-deps.tsv, but nothing used to fill
+# it with *this* set: the TUI only caches the extras it displays and
+# tt-cleanup-deps only the tracked packages, so the sync's few hundred
+# untracked ones stayed permanent misses (measured: 155 of 213 on a real
+# machine, ~1.3s each, ~3.5 minutes of the run). tui.warm_deps resolves
+# them through the same cache with 8 parallel workers, turning the whole
+# thing into cache hits.
+#
+# It also has to run here rather than earlier: updatePackageManager() has
+# already done its `brew upgrade` by now, so the installed set — and with
+# it the cache fingerprint — has stopped moving. Warming before that
+# would key the cache on a set the upgrade then changes, and loadDepCache
+# would throw the whole thing away as stale, which is exactly how a
+# "Update System" run used to end up doing every lookup live.
+#
+# Best effort throughout: no venv, no Python, a failing lookup — all just
+# mean the old, slow per-package path, never a failed sync.
+function warmDepCache() {
+  local candidates="$TMP/dep_candidates"
+  : >"$candidates"
+  # Must select the same packages the loop below runs depCount() on;
+  # warming a different set would leave the real ones uncached.
+  while read -r l; do
+    [ -z "$l" ] && continue
+    case "$l" in
+    *=* | *\#*) continue ;;
+    esac
+    grep -qxF "${l##*/}" $TMP/to_install.short 2>/dev/null ||
+      echo "$l" >>"$candidates"
+  done <$TMP/local_installed
+
+  local count
+  count=$(grep -c "" "$candidates" 2>/dev/null) || count=0
+  [ "$count" -gt 0 ] || return 0
+
+  log "Resolving dependencies for $count untracked packages (cached for later runs)..."
+  # Both sides must land on the same cache file. Bash hardcodes $BASE
+  # while the Python side reads $TT_BASE, so pass ours along explicitly —
+  # otherwise a TT_BASE in the environment silently sends the warm-up to
+  # a different cache and depCount() below still finds nothing.
+  if TT_BASE="$BASE" run_python_tool tui.warm_deps --candidates "$candidates" \
+    --installed $TMP/local_installed; then
+    log "${GN}done$RESET"
+  else
+    warn "could not pre-compute dependency data - falling back to per-package lookups"
+  fi
+}
+
 function syncInstall() {
   updatePackageManager
 
@@ -388,6 +442,7 @@ function syncInstall() {
   # (deletion candidate) and "not installed" (reinstall attempt).
   sed 's|.*/||' $TMP/to_install.sorted >$TMP/to_install.short
   sed 's|.*/||' $TMP/local_installed >$TMP/local_installed.short
+  warmDepCache
   loadDepCache
   cat $TMP/local_installed | while read l; do
     if [ -z "$l" ]; then
@@ -827,6 +882,11 @@ if [ $# -gt 0 ]; then
   --cleanup-deps)
     shift
     run_python_tool tui.cleanup_deps "$@"
+    exit $?
+    ;;
+  --warm-deps)
+    shift
+    run_python_tool tui.warm_deps "$@"
     exit $?
     ;;
   -h | --help)
