@@ -219,3 +219,63 @@ def test_dirty_beats_behind(clone: Path, origin_repo: Path, tmp_path: Path):
 
 def test_ahead_behind_counts(clone: Path):
     assert ahead_behind(clone, "main") == (0, 0)
+
+
+from tui.core.repo import sync_to_system
+
+
+def test_sync_clones_when_target_missing(tmp_path: Path, origin_repo: Path):
+    target = tmp_path / "fresh"
+    result = sync_to_system(target, RepoSpec(url=str(origin_repo), branch="main"))
+    assert result.action == "cloned"
+    assert (target / "README.md").read_text() == "one\n"
+
+
+def test_sync_backs_up_non_repo_directory_then_clones(tmp_path: Path, origin_repo: Path):
+    target = tmp_path / "occupied"
+    target.mkdir()
+    (target / "old.txt").write_text("old\n")
+    result = sync_to_system(target, RepoSpec(url=str(origin_repo), branch="main"))
+    assert result.action == "cloned"
+    assert (target / "README.md").is_file()
+    assert (tmp_path / "occupied.ttbak" / "old.txt").read_text() == "old\n"
+
+
+def test_sync_is_a_noop_when_up_to_date(clone: Path, origin_repo: Path):
+    result = sync_to_system(clone, RepoSpec(url=str(origin_repo), branch="main"))
+    assert result.action == "uptodate"
+
+
+def test_sync_pulls_when_behind(clone: Path, origin_repo: Path, tmp_path: Path):
+    _push_remote_commit(tmp_path, origin_repo)
+
+    result = sync_to_system(clone, RepoSpec(url=str(origin_repo), branch="main"))
+    assert result.action == "pulled"
+    assert (clone / "remote.txt").is_file()
+
+
+def test_sync_skips_dirty_repo_and_keeps_local_work(clone: Path, origin_repo: Path):
+    (clone / "README.md").write_text("my work\n")
+    result = sync_to_system(clone, RepoSpec(url=str(origin_repo), branch="main"))
+    assert result.action == "skipped"
+    assert (clone / "README.md").read_text() == "my work\n"
+
+
+def test_sync_resets_dirty_repo_when_force_is_set(clone: Path, origin_repo: Path):
+    (clone / "README.md").write_text("my work\n")
+    (clone / "junk.txt").write_text("junk\n")
+    result = sync_to_system(clone, RepoSpec(url=str(origin_repo), branch="main", force=True))
+    assert result.action == "reset"
+    assert (clone / "README.md").read_text() == "one\n"
+    assert not (clone / "junk.txt").exists()
+
+
+def test_sync_skips_on_origin_mismatch(clone: Path):
+    before = (clone / "README.md").read_text()
+    result = sync_to_system(clone, RepoSpec(url="git@example.com:other.git", branch="main"))
+    assert result.action == "skipped"
+    assert (clone / "README.md").read_text() == before
+
+
+def test_sync_fails_on_invalid_spec(clone: Path):
+    assert sync_to_system(clone, RepoSpec(url="")).action == "failed"

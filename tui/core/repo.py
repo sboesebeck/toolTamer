@@ -167,3 +167,69 @@ def status(system_path: Path, spec: RepoSpec, fetch: bool = False) -> RepoStatus
     if ahead:
         return "ahead"
     return "ok"
+
+
+@dataclass
+class SyncResult:
+    action: str  # cloned | pulled | reset | uptodate | skipped | failed
+    message: str
+
+
+def clone(system_path: Path, spec: RepoSpec) -> bool:
+    """Clone spec.url into system_path. Returns True on success."""
+    args = ["clone", "--quiet"]
+    if spec.branch:
+        args += ["--branch", spec.branch]
+    args += [spec.url, str(system_path)]
+    system_path.parent.mkdir(parents=True, exist_ok=True)
+    rc, _ = _git(args)
+    return rc == 0
+
+
+def pull(system_path: Path, spec: RepoSpec) -> bool:
+    """Fast-forward-only pull. Returns True on success."""
+    rc, _ = _git(["pull", "--quiet", "--ff-only"], cwd=system_path)
+    return rc == 0
+
+
+def sync_to_system(system_path: Path, spec: RepoSpec) -> SyncResult:
+    """Bring `system_path` in line with `spec`. Never destroys local work
+    unless spec.force is set. Mirrors syncRepoToSystem in bin/include.sh."""
+    import shutil
+
+    if not spec.url:
+        return SyncResult("failed", f"{system_path}: .ttgit has no url")
+    if not git_available():
+        return SyncResult("skipped", f"{system_path}: git is not installed")
+
+    if not system_path.exists():
+        if clone(system_path, spec):
+            return SyncResult("cloned", f"Cloned {spec.url} into {system_path}")
+        return SyncResult("failed", f"Clone of {spec.url} failed")
+
+    if detect(system_path) is None:
+        backup = system_path.with_name(system_path.name + ".ttbak")
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+        system_path.rename(backup)
+        if clone(system_path, spec):
+            return SyncResult("cloned", f"Replaced non-repo {system_path} (backup: {backup})")
+        return SyncResult("failed", f"Clone of {spec.url} failed (backup: {backup})")
+
+    state = status(system_path, spec, fetch=True)
+    if state == "wrong_origin":
+        return SyncResult("skipped", f"{system_path}: origin differs from .ttgit")
+    if state in ("dirty", "diverged"):
+        if not spec.force:
+            return SyncResult("skipped", f"{system_path}: local changes — not touched")
+        branch = _effective_branch(system_path, spec)
+        rc_reset, _ = _git(["reset", "--hard", f"origin/{branch}"], cwd=system_path)
+        rc_clean, _ = _git(["clean", "-fd"], cwd=system_path)
+        if rc_reset == 0 and rc_clean == 0:
+            return SyncResult("reset", f"{system_path}: reset to origin/{branch} (force)")
+        return SyncResult("failed", f"{system_path}: reset failed")
+    if state == "behind":
+        if pull(system_path, spec):
+            return SyncResult("pulled", f"Updated {system_path}")
+        return SyncResult("failed", f"{system_path}: pull failed")
+    return SyncResult("uptodate", f"{system_path}: up to date")
