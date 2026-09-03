@@ -467,3 +467,169 @@ async def test_add_file_screen_asks_repo_question_for_a_repo_root(tmp_path: Path
         )
         await pilot.pause()
         assert isinstance(app.screen, RepoTrackChoiceScreen)
+
+
+def test_convertible_detects_tracked_directory_that_is_a_repo(tmp_config: Path, tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    target = home / ".config" / "nvim"
+    target.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", "--initial-branch=main"],
+                   cwd=target, check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", "git@example.com:me/nvim.git"],
+                   cwd=target, check=True, capture_output=True)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    (store / "init.lua").write_text("-- copied\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+
+    spec = screen._convertible("testhost", "nvim", ".config/nvim")
+    assert spec is not None
+    assert spec.url == "git@example.com:me/nvim.git"
+
+
+def test_convertible_is_none_for_plain_directory(tmp_config: Path, tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".config" / "kitty").mkdir(parents=True)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("kitty;.config/kitty\n")
+    (host / "files" / "kitty").mkdir(parents=True)
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+
+    assert screen._convertible("testhost", "kitty", ".config/kitty") is None
+
+
+def test_convertible_is_none_for_an_existing_repo_entry(tmp_config: Path, tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    target = home / ".config" / "nvim"
+    target.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", "--initial-branch=main"],
+                   cwd=target, check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", "git@example.com:me/nvim.git"],
+                   cwd=target, check=True, capture_output=True)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    (store / ".ttgit").write_text("url = git@example.com:me/nvim.git\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+
+    assert screen._convertible("testhost", "nvim", ".config/nvim") is None
+
+
+from tui.screens.files import ConvertToRepoScreen
+
+
+def _build_convertible_dir_config(tmp_path: Path) -> tuple[Path, Path]:
+    """A tmp_config with one tracked directory entry ('nvim' -> '.config/nvim')
+    whose stored copy is a plain mirror while the system side is already a
+    real (local, offline) git repo root — the exact situation 'g' migrates."""
+    base = tmp_path / "toolTamer"
+    host = base / "configs" / "testhost"
+    host.mkdir(parents=True)
+    (host / "files").mkdir()
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    (host / "includes.conf").write_text("")
+    (base / "tt.conf").write_text("")
+
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    (store / "init.lua").write_text("-- copied\n")
+
+    fake_home = tmp_path / "fake_home"
+    target = fake_home / ".config" / "nvim"
+    target.mkdir(parents=True)
+    (target / "init.lua").write_text("-- copied\n")
+    _run_git(target, "init", "--quiet", "--initial-branch=main")
+    _run_git(target, "config", "user.email", "t@example.com")
+    _run_git(target, "config", "user.name", "Test")
+    _run_git(target, "add", "init.lua")
+    _run_git(target, "commit", "--quiet", "-m", "init")
+    origin = str(tmp_path / "origin.git")
+    _run_git(target, "remote", "add", "origin", origin)
+
+    return base, fake_home
+
+
+@pytest.mark.asyncio
+async def test_show_diff_hints_at_conversion_for_a_repo_directory(tmp_path: Path):
+    base, fake_home = _build_convertible_dir_config(tmp_path)
+    with patch("socket.gethostname", return_value="testhost"), \
+         patch.object(Path, "home", return_value=fake_home):
+        app = _RepoFileScreenHarness(TTConfig(base), SystemInfo())
+        async with app.run_test() as pilot:
+            screen = app.screen
+            worker = screen._show_diff("testhost", "nvim", ".config/nvim")
+            await worker.wait()
+            await pilot.pause()
+            text = _extract_log_text(screen.query_one("#file-diff", RichLog))
+
+    assert "git repository" in text
+    assert "Press 'g'" in text
+
+
+@pytest.mark.asyncio
+async def test_convert_to_repo_does_nothing_without_confirmation(tmp_path: Path):
+    """The gate is real: cancelling the dialog must leave the store untouched."""
+    base, fake_home = _build_convertible_dir_config(tmp_path)
+    store = base / "configs" / "testhost" / "files" / "nvim"
+    with patch("socket.gethostname", return_value="testhost"), \
+         patch.object(Path, "home", return_value=fake_home):
+        app = _RepoFileScreenHarness(TTConfig(base), SystemInfo())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.screen.query_one("#file-table", DataTable)
+            table.focus()
+            table.move_cursor(row=0)
+            await pilot.pause()
+            await pilot.press("g")
+            await pilot.pause()
+            assert isinstance(app.screen, ConvertToRepoScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+
+    assert (store / "init.lua").exists()
+    assert read_marker(store) is None
+
+
+@pytest.mark.asyncio
+async def test_convert_to_repo_converts_the_store_after_confirmation(tmp_path: Path):
+    base, fake_home = _build_convertible_dir_config(tmp_path)
+    store = base / "configs" / "testhost" / "files" / "nvim"
+    target = fake_home / ".config" / "nvim"
+    with patch("socket.gethostname", return_value="testhost"), \
+         patch.object(Path, "home", return_value=fake_home):
+        app = _RepoFileScreenHarness(TTConfig(base), SystemInfo())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.screen.query_one("#file-table", DataTable)
+            table.focus()
+            table.move_cursor(row=0)
+            await pilot.pause()
+            await pilot.press("g")
+            await pilot.pause()
+            assert isinstance(app.screen, ConvertToRepoScreen)
+            await pilot.press("y")
+            await pilot.pause()
+
+    # Store side: mirrored file gone, replaced by a marker.
+    assert not (store / "init.lua").exists()
+    spec = read_marker(store)
+    assert spec is not None
+    assert "origin.git" in spec.url
+    # System side is never touched by conversion.
+    assert (target / "init.lua").read_text() == "-- copied\n"
+    assert (target / ".git").exists()

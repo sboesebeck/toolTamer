@@ -46,6 +46,7 @@ class FileScreen(Screen):
         ("r", "remove_from_tt", "Remove"),
         ("m", "move_file", "Move"),
         ("n", "add_file", "Add File"),
+        ("g", "convert_to_repo", "To repo"),
         ("slash", "focus_search", "Search"),
         ("tab", "switch_pane", "Switch Pane"),
     ]
@@ -318,6 +319,17 @@ class FileScreen(Screen):
             for text, style in self._repo_detail_lines(spec, sys_file):
                 self.app.call_from_thread(log.write, Text(text, style=style))
             return
+
+        if repo_file.is_dir():
+            from tui.core.repo import detect as _detect
+            hint = _detect(sys_file)
+            if hint is not None:
+                self.app.call_from_thread(log.write, Text(
+                    f"This directory is a git repository ({hint.url}). "
+                    f"Press 'g' to track it as a repo instead of copying it.",
+                    style="bold yellow",
+                ))
+                self.app.call_from_thread(log.write, Text(""))
 
         # Identify shadowing relationships for this target
         all_for_target = [
@@ -900,6 +912,51 @@ class FileScreen(Screen):
         else:
             self.query_one("#file-table", DataTable).focus()
 
+    def _convertible(self, config: str, stored: str, target: str) -> RepoSpec | None:
+        """The RepoSpec for a tracked *directory* entry whose system side is
+        a git repo root and which is not already a repo entry. Else None."""
+        from tui.core.config import _resolve_effective_target
+
+        store = self._tt_config.configs_dir / config / "files" / stored
+        if repo_mod.read_marker(store) is not None:
+            return None
+        if not store.is_dir():
+            return None
+        sys_path = Path.home() / _resolve_effective_target(stored, target)
+        return repo_mod.detect(sys_path)
+
+    def action_convert_to_repo(self) -> None:
+        sel = self._get_selected()
+        if not sel:
+            return
+        config, stored, target = sel
+        spec = self._convertible(config, stored, target)
+        if spec is None:
+            self.notify(
+                "Only tracked directories whose system path is a git repo root "
+                "can be converted.",
+                severity="warning", timeout=6,
+            )
+            return
+        store = self._tt_config.configs_dir / config / "files" / stored
+        from tui.core.config import _resolve_effective_target, iter_tree_files
+        count = sum(1 for _ in iter_tree_files(store))
+        eff = _resolve_effective_target(stored, target)
+
+        def _after(confirmed: bool | None) -> None:
+            if not confirmed:
+                return
+            report = self._tt_config.convert_to_repo(config, stored, spec)
+            for line in report:
+                self.notify(line, timeout=8)
+            self._tree_cache.clear()
+            self._refresh_files()
+            self._show_diff(config, stored, target)
+
+        self.app.push_screen(
+            ConvertToRepoScreen(eff, config, spec, count), callback=_after
+        )
+
 
 class ConfirmDeletionsScreen(ModalScreen[bool]):
     """Confirm a directory sync that would delete files on the destination."""
@@ -953,6 +1010,59 @@ class ConfirmDeletionsScreen(ModalScreen[bool]):
             log.write(Text(f"  - {path}", style="red"))
         if len(self._deletions) > 200:
             log.write(Text(f"  ... and {len(self._deletions) - 200} more", style="dim"))
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class ConvertToRepoScreen(ModalScreen[bool]):
+    """Confirm turning a tracked directory into a git-repo entry."""
+
+    BINDINGS = [("escape", "cancel", "Cancel"), ("y", "confirm", "Convert")]
+
+    DEFAULT_CSS = """
+    ConvertToRepoScreen {
+        align: center middle;
+    }
+    #convert-repo-dialog {
+        width: 76;
+        height: auto;
+        border: round $warning;
+        background: $surface;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, eff_target: str, config: str, spec: RepoSpec, file_count: int):
+        super().__init__()
+        self._eff_target = eff_target
+        self._config = config
+        self._spec = spec
+        self._file_count = file_count
+
+    def compose(self) -> ComposeResult:
+        with Container(id="convert-repo-dialog"):
+            yield Label(Text.assemble(
+                ("Convert ", "bold"), (f"~/{self._eff_target}", "cyan"),
+                (f" in '{self._config}' to a repo entry", "bold"),
+            ))
+            yield Label(Text(""))
+            yield Label(Text(f"  origin  {self._spec.url}", style="dim"))
+            yield Label(Text(f"  branch  {self._spec.branch or '(remote HEAD)'}", style="dim"))
+            yield Label(Text(""))
+            yield Label(Text(
+                f"{self._file_count} stored file(s) will be removed from ToolTamer.",
+                style="bold yellow",
+            ))
+            yield Label(Text(
+                "Your system copy is not touched. ToolTamer will sync it with "
+                "clone/pull from now on.", style="dim",
+            ))
+            yield Label(Text(""))
+            yield Label(Text("y=convert  Esc=cancel", style="dim"))
 
     def action_confirm(self) -> None:
         self.dismiss(True)
