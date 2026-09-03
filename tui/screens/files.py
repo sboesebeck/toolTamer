@@ -24,6 +24,7 @@ from textual.worker import get_current_worker
 from tui.core import repo as repo_mod
 from tui.core.config import TTConfig, dir_diff, tree_hash, tree_signature
 from tui.core.diff_render import render_changed_diffs
+from tui.core.repo import RepoSpec
 from tui.core.system import SystemInfo
 
 
@@ -106,8 +107,14 @@ class FileScreen(Screen):
             spec = m.repo
             if spec is not None:
                 repo_state = repo_mod.status(sys_file, spec)
-                status = {"ok": "ok", "ahead": "ok",
-                          "missing": "missing_system"}.get(repo_state, "modified")
+                status = {
+                    "ok": "ok",
+                    "ahead": "ok",
+                    "missing": "missing_system",
+                    "not_a_repo": "missing_repo",
+                    "wrong_origin": "missing_repo",
+                    "invalid_spec": "missing_repo",
+                }.get(repo_state, "modified")
             else:
                 repo_state = None
                 status = self._file_status(m.repo_path, sys_file)
@@ -143,11 +150,9 @@ class FileScreen(Screen):
             else:
                 st.stylize("red")
 
+            target_text = Text(f"~/{eff_target}")
             if spec is not None:
-                target_text = Text(f"~/{eff_target}")
                 target_text.append(f"  ⎇ {spec.branch or 'HEAD'}", style="dim cyan")
-            else:
-                target_text = Text(f"~/{eff_target}")
             cfg_text = Text(m.config)
             if not m.is_effective:
                 target_text.stylize("dim")
@@ -196,7 +201,7 @@ class FileScreen(Screen):
         return FileScreen._REPO_TOKENS.get(state, "??")
 
     @staticmethod
-    def _repo_detail_lines(spec, sys_path: Path) -> list[tuple[str, str]]:
+    def _repo_detail_lines(spec: RepoSpec, sys_path: Path) -> list[tuple[str, str]]:
         """Detail-pane content for a repo entry: the clone spec plus the
         current local state. No file diff — the store holds no content."""
         lines: list[tuple[str, str]] = [("", "")]

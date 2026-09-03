@@ -104,3 +104,145 @@ def test_repo_detail_lines_flag_invalid_spec(tmp_path: Path):
     lines = FileScreen._repo_detail_lines(RepoSpec(url=""), tmp_path)
     text = "\n".join(t for t, _ in lines)
     assert "no url" in text
+
+
+import subprocess
+from unittest.mock import patch
+
+from textual.widgets import DataTable, RichLog
+
+from tui.core import repo as repo_mod
+from tui.core.config import TTConfig
+from tui.core.repo import write_marker
+from tui.core.system import SystemInfo
+
+
+def _run_git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _make_origin_repo(path: Path) -> Path:
+    """A local-path git repo used as 'the remote' — never a network URL,
+    so repo.status() (fetch=False) never touches the network."""
+    path.mkdir(parents=True)
+    _run_git(path, "init", "--quiet", "--initial-branch=main")
+    _run_git(path, "config", "user.email", "t@example.com")
+    _run_git(path, "config", "user.name", "Test")
+    (path / "README.md").write_text("hello\n")
+    _run_git(path, "add", "README.md")
+    _run_git(path, "commit", "--quiet", "-m", "init")
+    return path
+
+
+def _build_repo_entry_config(tmp_path: Path) -> tuple[Path, Path]:
+    """A tmp_config with one repo-tracked entry ('myrepo' -> '~/.myrepo'),
+    plus a fake $HOME that already holds a real local clone of that
+    entry's origin, so repo.status() reports 'ok' without any network
+    access."""
+    base = tmp_path / "toolTamer"
+    configs = base / "configs"
+    common = configs / "common"
+    common.mkdir(parents=True)
+    (common / "files").mkdir()
+    host = configs / "testhost"
+    host.mkdir(parents=True)
+    (host / "files").mkdir()
+    (host / "files.conf").write_text("")
+    (host / "includes.conf").write_text("")
+    (base / "tt.conf").write_text("")
+
+    origin = _make_origin_repo(tmp_path / "origin.git")
+
+    store_dir = common / "files" / "myrepo"
+    store_dir.mkdir()
+    write_marker(store_dir, RepoSpec(url=str(origin), branch="main"))
+    (common / "files.conf").write_text("myrepo;.myrepo\n")
+
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    clone_dir = fake_home / ".myrepo"
+    subprocess.run(
+        ["git", "clone", "--quiet", str(origin), str(clone_dir)],
+        check=True, capture_output=True,
+    )
+    _run_git(clone_dir, "config", "user.email", "t@example.com")
+    _run_git(clone_dir, "config", "user.name", "Test")
+
+    return base, fake_home
+
+
+class _RepoFileScreenHarness(App):
+    """Minimal app whose only job is to host a FileScreen for the test."""
+
+    def __init__(self, tt_config: TTConfig, system: SystemInfo):
+        super().__init__()
+        self._tt_config = tt_config
+        self._system = system
+
+    def on_mount(self) -> None:
+        self.push_screen(FileScreen(self._tt_config, self._system))
+
+
+def _extract_log_text(log) -> str:
+    lines = []
+    for strip in log.lines:
+        lines.append("".join(segment.text for segment in strip))
+    return "\n".join(lines)
+
+
+@pytest.mark.asyncio
+async def test_repo_entry_renders_status_token_and_branch_in_list(tmp_path: Path):
+    base, fake_home = _build_repo_entry_config(tmp_path)
+    with patch("socket.gethostname", return_value="testhost"), \
+         patch.object(Path, "home", return_value=fake_home):
+        app = _RepoFileScreenHarness(TTConfig(base), SystemInfo())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.screen.query_one("#file-table", DataTable)
+            row = table.get_row("common:myrepo:.myrepo")
+
+    st_text, target_text, _cfg_text = row
+    assert st_text.plain == "OK"
+    assert "⎇ main" in target_text.plain
+
+
+@pytest.mark.asyncio
+async def test_repo_entry_detail_pane_shows_repo_state_not_diff(tmp_path: Path):
+    base, fake_home = _build_repo_entry_config(tmp_path)
+    with patch("socket.gethostname", return_value="testhost"), \
+         patch.object(Path, "home", return_value=fake_home):
+        app = _RepoFileScreenHarness(TTConfig(base), SystemInfo())
+        async with app.run_test() as pilot:
+            screen = app.screen
+            worker = screen._show_diff("common", "myrepo", ".myrepo")
+            await worker.wait()
+            await pilot.pause()
+            text = _extract_log_text(screen.query_one("#file-diff", RichLog))
+
+    assert "Tracked as git repository" in text
+    assert "main" in text
+    assert "Status: ok" in text
+    assert "content differs" not in text
+    assert "Directories" not in text
+
+
+@pytest.mark.parametrize("broken_state", ["not_a_repo", "wrong_origin", "invalid_spec"])
+@pytest.mark.asyncio
+async def test_broken_repo_states_render_red_not_yellow(tmp_path: Path, monkeypatch, broken_state: str):
+    """R14: not_a_repo / wrong_origin / invalid_spec must render the same
+    red used for every other '??' row, not the bold-yellow used for a
+    merely dirty/behind repo."""
+    base, fake_home = _build_repo_entry_config(tmp_path)
+    monkeypatch.setattr(repo_mod, "status", lambda *a, **k: broken_state)
+    with patch("socket.gethostname", return_value="testhost"), \
+         patch.object(Path, "home", return_value=fake_home):
+        app = _RepoFileScreenHarness(TTConfig(base), SystemInfo())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.screen.query_one("#file-table", DataTable)
+            row = table.get_row("common:myrepo:.myrepo")
+
+    st_text = row[0]
+    style = str(st_text.spans[0].style) if st_text.spans else ""
+    assert "red" in style
+    assert "yellow" not in style
