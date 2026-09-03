@@ -151,9 +151,20 @@ function listDirExtras() {
 
 # Mirror directory $1 into $2: full copy including deletion of files that
 # are not present in the source. Uses rsync when available.
+#
+# Refuses to run at all when $1 cannot be read: the manual fallback below
+# builds its file list from `find "$src"`, which silently produces
+# nothing when $src isn't readable/searchable (permission denied), and
+# listDirExtras would then see every file in $dst as "extra" and delete
+# it. That is true for ANY tracked directory, not only repo entries, so
+# the guard lives here rather than in a caller.
 function mirrorDir() {
   local src="$1"
   local dst="$2"
+  if [ ! -r "$src" ] || [ ! -x "$src" ]; then
+    warn "$src is not readable - refusing to mirror (would empty $dst)"
+    return 1
+  fi
   mkdir -p "$dst" || return 1
   if command -v rsync >/dev/null 2>&1; then
     if rsync -a --delete "$src/" "$dst/"; then
@@ -183,6 +194,12 @@ function syncDirToSystem() {
   local gitdir="$1"
   local sysdir="$2"
   logn "Comparing dir ${GN}$sysdir${RESET} <-> ${BL}${gitdir##$BASE/configs/}${RESET}....."
+  if [ ! -r "$gitdir" ] || [ ! -x "$gitdir" ]; then
+    log "${RD}not readable${RESET} - skipped"
+    warn "$gitdir is not readable - $sysdir left untouched"
+    note "Skipped directory sync (unreadable source)" "$sysdir"
+    return
+  fi
   if [ -e "$sysdir" ] && [ ! -d "$sysdir" ]; then
     log "${YL}target exists as file${RESET} - backing up, replacing with directory"
     rm -rf "$sysdir.ttbak"
@@ -218,6 +235,11 @@ function captureDirFromSystem() {
     # Repo entries hold a marker, not content — mirroring would destroy it.
     captureRepoFromSystem "$sysdir" "$gitdir"
     return $?
+  fi
+  if [ ! -r "$sysdir" ] || [ ! -x "$sysdir" ]; then
+    warn "$sysdir is not readable - $gitdir left untouched"
+    note "Skipped directory capture (unreadable source)" "$sysdir"
+    return 2
   fi
   if [ -e "$gitdir" ] && [ ! -d "$gitdir" ]; then
     rm -f "$gitdir"
@@ -452,17 +474,27 @@ function captureRepoFromSystem() {
     return 1
   fi
 
-  {
+  # Guard the redirect: if $TTGIT_MARKER is itself a directory (a broken
+  # marker isRepoEntry now routes here instead of to mirrorDir), the
+  # redirect fails and nothing must be reported as written.
+  if {
     echo "url    = $new_url"
     if [ -n "$new_branch" ]; then
       echo "branch = $new_branch"
     fi
-    if [ "$force" = "true" ]; then
+    # Case-insensitive, matching the fold in syncRepoToSystem and
+    # tui/core/repo.py's spec.force (.lower() == "true").
+    if [ "$(printf '%s' "$force" | tr '[:upper:]' '[:lower:]')" = true ]; then
       echo "force  = true"
     fi
-  } >"$gitdir/$TTGIT_MARKER"
-  note "Updated repo marker" "$sysdir ($new_url${new_branch:+, branch $new_branch})"
-  return 0
+  } 2>/dev/null >"$gitdir/$TTGIT_MARKER"; then
+    note "Updated repo marker" "$sysdir ($new_url${new_branch:+, branch $new_branch})"
+    return 0
+  else
+    warn "$gitdir/$TTGIT_MARKER could not be written - marker left unchanged"
+    note "Skipped repo capture (marker not writable)" "$sysdir"
+    return 2
+  fi
 }
 
 function getInstalledPackages() {

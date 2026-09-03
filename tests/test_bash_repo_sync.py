@@ -148,15 +148,19 @@ def test_bash_and_python_agree_on_duplicate_keys(tmp_path: Path):
     store.mkdir()
     (store / ".ttgit").write_text(
         "url    = git@example.com:me/a.git\n"
+        "branch = dev\n"
         "force  = true\n"
         "url    = git@example.com:me/b.git\n"
+        "branch = main\n"
         "force  = false\n"
     )
     spec = read_marker(store)
     assert spec.url == "git@example.com:me/b.git"
+    assert spec.branch == "main"
     assert spec.force is False
 
     assert run_bash(f'readRepoSpec "{store}" url', tmp_path).stdout.strip() == spec.url
+    assert run_bash(f'readRepoSpec "{store}" branch', tmp_path).stdout.strip() == spec.branch
     assert run_bash(f'readRepoSpec "{store}" force', tmp_path).stdout.strip() == "false"
 
 
@@ -404,6 +408,43 @@ def test_sync_file_survives_when_ttgit_marker_is_a_directory(tmp_path: Path, ori
     assert "Broken repo entry" in _summary(tmp_path)
 
 
+def test_sync_file_survives_when_store_dir_is_unreadable(tmp_path: Path, origin_repo: Path):
+    """Regression (Critical 2, round 2): a fail-closed isRepoEntry cannot
+    fix this — `test -e`/`test -L` on a path inside an unreadable
+    directory are both false for the same reason `test -f` was, so this
+    plain (non-repo) tracked directory never even reaches isRepoEntry's
+    guard. The real bug is in mirrorDir itself: its manual fallback finds
+    nothing under an unreadable source, so listDirExtras reports every
+    destination file as "extra" and deletes it — for ANY tracked
+    directory, not only repo entries. mirrorDir must refuse to run when
+    its source isn't readable, and syncDirToSystem must report that skip
+    instead of silently mirroring nothing.
+
+    chmod(0o000) on the store dir, restored in `finally` no matter what,
+    so a failing assertion here can never leave an unremovable directory
+    behind for pytest's tmp_path cleanup."""
+    store = tmp_path / "store"
+    store.mkdir(parents=True)
+    (store / "init.lua").write_text("-- content\n")
+
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+    (target / "mine.txt").write_text("my work\n")
+
+    store.chmod(0o000)
+    try:
+        _run_sync_file(target, store, tmp_path)
+    finally:
+        store.chmod(0o755)
+
+    assert (target / "README.md").is_file()
+    assert (target / "mine.txt").read_text() == "my work\n"
+    assert (target / ".git").exists()
+    summary = _summary(tmp_path).lower()
+    assert "skip" in summary
+
+
 def test_capture_repo_updates_marker_on_new_origin(tmp_path: Path, origin_repo: Path):
     store = tmp_path / "store"
     make_marker(store, "git@example.com:me/old.git", branch="main")
@@ -445,6 +486,26 @@ def test_capture_repo_preserves_force_flag(tmp_path: Path, origin_repo: Path):
     assert "force  = true" in (store / ".ttgit").read_text()
 
 
+def test_capture_repo_preserves_uppercase_force_flag(tmp_path: Path, origin_repo: Path):
+    """force = TRUE must survive a marker rewrite too. Both capture and
+    sync must fold case the same way — round 1 folded only the sync-side
+    comparison, so an uppercase force there was still honoured for
+    `git reset --hard`, but capturing (e.g. after a new origin) silently
+    dropped it because this comparison was still case-sensitive."""
+    store = tmp_path / "store"
+    store.mkdir(parents=True)
+    (store / ".ttgit").write_text(
+        "url    = git@example.com:me/old.git\nbranch = main\nforce  = TRUE\n"
+    )
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+
+    run_bash(f'captureRepoFromSystem "{target}" "{store}"', tmp_path)
+
+    assert "force  = true" in (store / ".ttgit").read_text()
+
+
 def test_capture_repo_leaves_marker_when_target_is_not_a_repo(tmp_path: Path):
     store = tmp_path / "store"
     make_marker(store, "git@example.com:me/r.git")
@@ -456,6 +517,29 @@ def test_capture_repo_leaves_marker_when_target_is_not_a_repo(tmp_path: Path):
 
     assert result.stdout.strip().splitlines()[-1] == "rc=2"
     assert (store / ".ttgit").read_text() == before
+
+
+def test_capture_repo_reports_failure_when_marker_path_is_a_directory(
+    tmp_path: Path, origin_repo: Path
+):
+    """Regression: the marker-write redirect can itself fail (.ttgit is a
+    directory, which isRepoEntry's fail-closed predicate now routes to
+    captureRepoFromSystem instead of to mirrorDir). Nothing is destroyed
+    by that routing, but captureRepoFromSystem must not claim success —
+    rc must be 2 and no "Updated repo marker" note may appear."""
+    store = tmp_path / "store"
+    store.mkdir(parents=True)
+    (store / ".ttgit").mkdir()  # marker path exists but is a directory
+
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+
+    result = run_bash(f'captureRepoFromSystem "{target}" "{store}"; echo "rc=$?"', tmp_path)
+
+    assert result.stdout.strip().splitlines()[-1] == "rc=2"
+    assert (store / ".ttgit").is_dir()
+    assert "Updated repo marker" not in _summary(tmp_path)
 
 
 def test_capture_dir_from_system_refuses_to_overwrite_a_marker(tmp_path: Path):
@@ -471,3 +555,29 @@ def test_capture_dir_from_system_refuses_to_overwrite_a_marker(tmp_path: Path):
 
     assert (store / ".ttgit").is_file()
     assert not (store / "init.lua").exists()
+
+
+def test_capture_dir_from_system_skips_when_sysdir_is_unreadable(tmp_path: Path):
+    """Same defect as the syncFile/mirrorDir regression, opposite
+    direction: captureDirFromSystem must refuse to mirror when its
+    system-side source is unreadable, instead of emptying the TT store
+    side. chmod restored in `finally` so a failing assertion can't leave
+    an unremovable directory behind."""
+    sysdir = tmp_path / "sys" / "nvim"
+    sysdir.mkdir(parents=True)
+    (sysdir / "init.lua").write_text("-- content\n")
+
+    store = tmp_path / "store"
+    store.mkdir(parents=True)
+    (store / "init.lua").write_text("-- old content\n")
+
+    sysdir.chmod(0o000)
+    try:
+        result = run_bash(f'captureDirFromSystem "{sysdir}" "{store}"; echo "rc=$?"', tmp_path)
+    finally:
+        sysdir.chmod(0o755)
+
+    assert result.stdout.strip().splitlines()[-1] == "rc=2"
+    assert (store / "init.lua").read_text() == "-- old content\n"
+    summary = _summary(tmp_path).lower()
+    assert "skip" in summary
