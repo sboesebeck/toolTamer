@@ -76,6 +76,9 @@ class FileScreen(Screen):
         self._system = system
         # tree-hash cache: path -> (stat signature, content hash)
         self._tree_cache: dict[str, tuple[str, str]] = {}
+        # rows built by the last _load_files pass, so filtering can re-render
+        # without recomputing every entry's status
+        self._rows: list[tuple[str, Text, Text, Text, str]] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -114,12 +117,30 @@ class FileScreen(Screen):
         log.write(Text("  Esc  Back", style="dim"))
 
     def _load_files(self, filter_text: str = "") -> None:
+        self._rows = self._build_rows()
+        self._render_rows(filter_text)
+
+    def _render_rows(self, filter_text: str = "") -> None:
+        """Draw the rows built by the last _build_rows() pass, applying the
+        filter. Pure display: no status computation, no git, no file I/O."""
         table = self.query_one("#file-table", DataTable)
         table.clear()
+        filt = filter_text.lower().strip()
+        for searchable, st, target_text, cfg_text, key in self._rows:
+            if filt and filt not in searchable:
+                continue
+            table.add_row(st, target_text, cfg_text, key=key)
+
+    def _build_rows(self) -> list[tuple[str, Text, Text, Text, str]]:
+        """Compute every row: (searchable text, status, target, config, key).
+
+        This is the expensive half — tree hashes for directory entries,
+        repo_mod.status() for repo entries — so it is kept apart from
+        rendering, which the filter box drives on every keystroke."""
+        rows: list[tuple[str, Text, Text, Text, str]] = []
         host = self._system.hostname
         mappings = self._tt_config.get_effective_file_mappings(host)
         home = Path.home()
-        filt = filter_text.lower().strip()
         # Sort: by effective target, effective entries before shadowed ones
         for m in sorted(mappings, key=lambda x: (x.effective_target, not x.is_effective)):
             eff_target = m.effective_target
@@ -146,10 +167,7 @@ class FileScreen(Screen):
                 }.get(status, "??")
 
             # Filter matches status code, path, or config name
-            if filt:
-                searchable = f"{status_token} ~/{eff_target} {m.config}".lower()
-                if filt not in searchable:
-                    continue
+            searchable = f"{status_token} ~/{eff_target} {m.config}".lower()
 
             st = Text(status_token)
             if self_shadow:
@@ -177,12 +195,11 @@ class FileScreen(Screen):
             else:
                 cfg_text.stylize("blue")
 
-            table.add_row(
-                st,
-                target_text,
-                cfg_text,
-                key=f"{m.config}:{m.stored}:{m.target}",
-            )
+            rows.append((
+                searchable, st, target_text, cfg_text,
+                f"{m.config}:{m.stored}:{m.target}",
+            ))
+        return rows
 
     def _refresh_files(self) -> None:
         current_filter = self.query_one("#file-filter", Input).value
@@ -190,7 +207,11 @@ class FileScreen(Screen):
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "file-filter":
-            self._load_files(filter_text=event.value)
+            # Filtering re-renders the rows the last pass built; it must not
+            # recompute them. _build_rows() runs repo_mod.status() per repo
+            # entry — six git subprocesses, ~38 ms each — and this fires on
+            # every keystroke.
+            self._render_rows(event.value)
 
     def _cached_tree_hash(self, root: Path) -> str:
         key = str(root)
@@ -277,7 +298,14 @@ class FileScreen(Screen):
         if state in ("missing", "invalid_spec"):
             return lines
 
-        ahead, behind = repo_mod.ahead_behind(sys_path, spec.branch or "HEAD")
+        # Same branch status() ranked the entry on. `spec.branch or "HEAD"`
+        # compared against origin/HEAD instead, so with no branch in the
+        # marker the pane could print "Behind the remote" above
+        # "0 ahead / 0 behind" — or, when the counts are both zero, above no
+        # counts at all.
+        ahead, behind = repo_mod.ahead_behind(
+            sys_path, repo_mod._effective_branch(sys_path, spec)
+        )
         if ahead or behind:
             lines.append((f"  {ahead} ahead / {behind} behind origin", "dim"))
         rc, head = repo_mod._git(["rev-parse", "--short", "HEAD"], cwd=sys_path)

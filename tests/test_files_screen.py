@@ -109,7 +109,7 @@ def test_repo_detail_lines_flag_invalid_spec(tmp_path: Path):
 import subprocess
 from unittest.mock import patch
 
-from textual.widgets import DataTable, RichLog
+from textual.widgets import DataTable, Input, RichLog
 
 from tui.core import repo as repo_mod
 from tui.core.config import TTConfig
@@ -290,10 +290,14 @@ def test_do_apply_refuses_when_store_dir_is_unreadable(tmp_config: Path, tmp_pat
     """R28: an unreadable store directory must never let _do_apply's plain-
     directory branch through.
 
-    Path.exists()/is_file() both swallow PermissionError, so read_marker
-    reports "no marker" for an unreadable store dir exactly as it would for
-    a plain directory — but the directory might in fact be a repo entry
-    whose .ttgit we simply cannot see. sys_file, unlike the store dir, is
+    read_marker stats a path *inside* the store dir, which needs search
+    permission on the store dir itself — so on this environment (Python
+    3.12.14) it raises PermissionError rather than politely reporting "no
+    marker": pathlib's _ignore_error covers ENOENT/ENOTDIR/EBADF/ELOOP, not
+    EACCES. Measured, not assumed. Either way the detector cannot answer the
+    question, because an unreadable store dir might in fact be a repo entry
+    whose .ttgit we simply cannot see — which is why the guard sits at the
+    destructive step and not at the detector. sys_file, unlike the store dir, is
     perfectly readable, so shutil.rmtree(sys_file) would succeed outright —
     deleting a possibly-real repository — before shutil.copytree(repo_file,
     ...) ever got a chance to fail trying to read the source. The guard
@@ -1011,3 +1015,115 @@ def test_repo_detail_lines_name_both_branches_on_a_mismatch(tmp_path: Path, monk
     assert "wrong_branch" in text
     assert "wip" in text
     assert "main" in text
+
+
+# --- minors ---------------------------------------------------------------
+
+
+def test_repo_detail_lines_count_against_the_same_branch_status_used(tmp_path: Path):
+    """The pane computed ahead/behind with `spec.branch or "HEAD"` while
+    status() used _effective_branch. With no branch in the marker and no
+    origin/HEAD to resolve, the pane printed "Behind the remote" over
+    "0 ahead / 0 behind" — or, as here, over no counts at all."""
+    origin = _make_origin_repo(tmp_path / "origin.git")
+    _run_git(origin, "branch", "dev")
+    clone_dir = tmp_path / "clone"
+    subprocess.run(["git", "clone", "--quiet", str(origin), str(clone_dir)],
+                   check=True, capture_output=True)
+    _run_git(clone_dir, "config", "user.email", "t@example.com")
+    _run_git(clone_dir, "config", "user.name", "Test")
+    # the remote's default branch is not the one we are on
+    _run_git(clone_dir, "remote", "set-head", "origin", "dev")
+    # move origin/main ahead, then fetch so the local refs know about it
+    (origin / "second.txt").write_text("two\n")
+    _run_git(origin, "add", "second.txt")
+    _run_git(origin, "commit", "--quiet", "-m", "second")
+    _run_git(clone_dir, "fetch", "--quiet", "origin")
+
+    spec = RepoSpec(url=str(origin))  # no branch in the marker
+    assert repo_mod.status(clone_dir, spec) == "behind"
+
+    lines = FileScreen._repo_detail_lines(spec, clone_dir)
+    text = "\n".join(t for t, _ in lines)
+    assert "Behind the remote" in text
+    assert "0 ahead / 1 behind" in text, text
+
+
+def test_save_repo_marker_preserves_an_existing_force_flag(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    """`force` authorises `git reset --hard`, so losing it on a marker
+    refresh silently disarms the user's own opt-in. bash's
+    captureRepoFromSystem has two tests for this; Python had none."""
+    home = tmp_path / "home"
+    target = home / ".config" / "nvim"
+    target.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", "--initial-branch=main"],
+                   cwd=target, check=True, capture_output=True)
+    new_origin = "git@example.com:me/moved.git"
+    subprocess.run(["git", "remote", "add", "origin", new_origin],
+                   cwd=target, check=True, capture_output=True)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    (store / ".ttgit").write_text(
+        f"url    = {tmp_path / 'old.git'}\nbranch = main\nforce  = true\n"
+    )
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+    message = screen._save_repo_marker("testhost", "nvim", ".config/nvim")
+
+    updated = read_marker(store)
+    assert updated.url == new_origin
+    assert updated.force is True, message
+
+
+@pytest.mark.asyncio
+async def test_filtering_does_not_recompute_repo_status(tmp_path: Path):
+    """_load_files ran repo_mod.status() synchronously on the main thread for
+    every repo entry — six git subprocesses, ~38 ms each — and
+    on_input_changed called _load_files again on every keystroke in the
+    filter box. Filtering now re-renders the rows the last pass built.
+
+    (The threaded detail-pane worker still recomputes the state of the one
+    highlighted entry when the cursor lands on a row; that is one call
+    regardless of how many entries exist, and it is off the main thread.)"""
+    base, fake_home = _build_repo_entry_config(tmp_path)
+
+    with patch("socket.gethostname", return_value="testhost"), \
+         patch.object(Path, "home", return_value=fake_home):
+        app = _RepoFileScreenHarness(TTConfig(base), SystemInfo())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+
+            builds: list[int] = []
+            real_build = screen._build_rows
+            screen._build_rows = lambda: (builds.append(1), real_build())[1]
+
+            filter_input = screen.query_one("#file-filter", Input)
+            table = screen.query_one("#file-table", DataTable)
+
+            filter_input.value = "myrepo"
+            await pilot.pause()
+            assert builds == []
+            assert table.row_count == 1
+
+            filter_input.value = "nothing-matches-this"
+            await pilot.pause()
+            assert builds == []
+            assert table.row_count == 0
+
+            filter_input.value = ""
+            await pilot.pause()
+            assert builds == []
+            assert table.row_count == 1
+
+            # an explicit refresh still rebuilds
+            screen._refresh_files()
+            await pilot.pause()
+            assert builds == [1]

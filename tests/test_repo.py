@@ -66,7 +66,7 @@ def test_read_marker_keys_are_case_sensitive(tmp_path: Path):
     assert spec.url == ""
 
 
-def test_read_marker_fails_open_when_marker_is_a_directory(tmp_path: Path):
+def test_a_directory_marker_reads_as_a_broken_repo_entry(tmp_path: Path):
     """R21: is_file() is False for a directory named .ttgit, which used to
     make read_marker return None — treating the entry as plain content and
     disarming the repo guard in _do_apply (rmtree + copytree over a real
