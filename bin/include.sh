@@ -149,28 +149,52 @@ function listDirExtras() {
   done
 }
 
+# True when every file/directory under $1 can be enumerated: readable
+# and searchable at its own top level AND with no permission error
+# anywhere further down. A directory can pass a plain [-r]/[-x] check on
+# itself while still containing an unreadable subdirectory — `find`
+# then silently omits that subtree instead of failing outright, which is
+# exactly what let listDirExtras see a mirror destination's counterparts
+# under it as "extra" and delete them. mirrorDir and its two callers
+# (syncDirToSystem, captureDirFromSystem) all use this one predicate so
+# a bad subdirectory is reported once, as a clean skip, rather than
+# falling through to a confusing partial failure further down.
+function dirFullyReadable() {
+  local dir="$1"
+  [ -r "$dir" ] && [ -x "$dir" ] || return 1
+  local enum_err
+  enum_err=$(cd "$dir" && find . \( -type f -o -type l \) 2>&1 >/dev/null)
+  [ -z "$enum_err" ]
+}
+
 # Mirror directory $1 into $2: full copy including deletion of files that
 # are not present in the source. Uses rsync when available.
 #
-# Refuses to run at all when $1 cannot be read: the manual fallback below
-# builds its file list from `find "$src"`, which silently produces
-# nothing when $src isn't readable/searchable (permission denied), and
-# listDirExtras would then see every file in $dst as "extra" and delete
-# it. That is true for ANY tracked directory, not only repo entries, so
-# the guard lives here rather than in a caller.
+# Refuses to run at all when $1 cannot be fully read (see
+# dirFullyReadable): the manual fallback below builds its file list from
+# `find "$src"`, which silently omits whatever it cannot read, and
+# listDirExtras would then see every missing file in $dst as "extra" and
+# delete it. That is true for ANY tracked directory, not only repo
+# entries, so the guard lives here rather than in a caller.
 function mirrorDir() {
   local src="$1"
   local dst="$2"
-  if [ ! -r "$src" ] || [ ! -x "$src" ]; then
-    warn "$src is not readable - refusing to mirror (would empty $dst)"
+  if ! dirFullyReadable "$src"; then
+    warn "$src could not be fully read - refusing to mirror (would empty $dst)"
     return 1
   fi
+
   mkdir -p "$dst" || return 1
   if command -v rsync >/dev/null 2>&1; then
     if rsync -a --delete "$src/" "$dst/"; then
       return 0
     fi
-    warn "rsync failed - falling back to manual mirror"
+    # rsync is installed and ran, so a nonzero exit here is a real
+    # failure (not the "rsync unavailable" case above) - falling back to
+    # the manual mirror below on a partial/failed run is exactly how a
+    # rsync-side problem used to turn into a manual-mirror deletion pass.
+    warn "rsync failed while mirroring $src -> $dst - refusing (a partial run must not delete anything on $dst)"
+    return 1
   fi
   (cd "$src" && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') | while IFS= read -r f; do
     [ -z "$f" ] && continue
@@ -194,9 +218,9 @@ function syncDirToSystem() {
   local gitdir="$1"
   local sysdir="$2"
   logn "Comparing dir ${GN}$sysdir${RESET} <-> ${BL}${gitdir##$BASE/configs/}${RESET}....."
-  if [ ! -r "$gitdir" ] || [ ! -x "$gitdir" ]; then
+  if ! dirFullyReadable "$gitdir"; then
     log "${RD}not readable${RESET} - skipped"
-    warn "$gitdir is not readable - $sysdir left untouched"
+    warn "$gitdir could not be fully read - $sysdir left untouched"
     note "Skipped directory sync (unreadable source)" "$sysdir"
     return
   fi
@@ -236,8 +260,8 @@ function captureDirFromSystem() {
     captureRepoFromSystem "$sysdir" "$gitdir"
     return $?
   fi
-  if [ ! -r "$sysdir" ] || [ ! -x "$sysdir" ]; then
-    warn "$sysdir is not readable - $gitdir left untouched"
+  if ! dirFullyReadable "$sysdir"; then
+    warn "$sysdir could not be fully read - $gitdir left untouched"
     note "Skipped directory capture (unreadable source)" "$sysdir"
     return 2
   fi

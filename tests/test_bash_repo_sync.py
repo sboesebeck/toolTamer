@@ -445,6 +445,80 @@ def test_sync_file_survives_when_store_dir_is_unreadable(tmp_path: Path, origin_
     assert "skip" in summary
 
 
+def test_sync_file_survives_when_store_has_unreadable_subdirectory(tmp_path: Path):
+    """Regression (round 3): a source directory readable at its own top
+    level but containing an unreadable subdirectory still let mirrorDir
+    destroy the destination's counterparts under round 2's fix — rsync
+    (or the manual find-based fallback) silently omits the subtree it
+    cannot enter, and listDirExtras then reports the destination's files
+    under it as "extra" and deletes them, even though the top-level
+    readability check passes. The reviewer's reproduction: store
+    readable, store/sub at mode 000, destination has sub/deep.lua and
+    sub/keep.lua — both used to get deleted with two "Deleted file (dir
+    sync)" summary lines plus "Updated directory".
+
+    chmod(0o000) on the subdirectory only, restored in `finally` so a
+    failing assertion can't leave an unremovable directory behind."""
+    store = tmp_path / "store"
+    store.mkdir(parents=True)
+    (store / "top.txt").write_text("top\n")
+    sub = store / "sub"
+    sub.mkdir()
+    (sub / "deep.lua").write_text("deep\n")
+
+    target = tmp_path / "sys" / "nvim"
+    target.mkdir(parents=True)
+    (target / "top.txt").write_text("top\n")
+    target_sub = target / "sub"
+    target_sub.mkdir()
+    (target_sub / "deep.lua").write_text("deep\n")
+    (target_sub / "keep.lua").write_text("keep\n")
+
+    sub.chmod(0o000)
+    try:
+        _run_sync_file(target, store, tmp_path)
+    finally:
+        sub.chmod(0o755)
+
+    assert (target_sub / "deep.lua").read_text() == "deep\n"
+    assert (target_sub / "keep.lua").read_text() == "keep\n"
+    summary = _summary(tmp_path).lower()
+    assert "skip" in summary
+
+
+def test_capture_dir_from_system_skips_when_sysdir_has_unreadable_subdirectory(tmp_path: Path):
+    """Same defect, opposite direction: captureDirFromSystem must refuse
+    when its system-side source has an unreadable subdirectory, not only
+    when the top level itself is unreadable. chmod restored in `finally`
+    so a failing assertion can't leave an unremovable directory behind."""
+    sysdir = tmp_path / "sys" / "nvim"
+    sysdir.mkdir(parents=True)
+    (sysdir / "top.txt").write_text("top\n")
+    sub = sysdir / "sub"
+    sub.mkdir()
+    (sub / "deep.lua").write_text("deep\n")
+
+    store = tmp_path / "store"
+    store.mkdir(parents=True)
+    (store / "top.txt").write_text("top\n")
+    store_sub = store / "sub"
+    store_sub.mkdir()
+    (store_sub / "deep.lua").write_text("deep\n")
+    (store_sub / "keep.lua").write_text("keep\n")
+
+    sub.chmod(0o000)
+    try:
+        result = run_bash(f'captureDirFromSystem "{sysdir}" "{store}"; echo "rc=$?"', tmp_path)
+    finally:
+        sub.chmod(0o755)
+
+    assert result.stdout.strip().splitlines()[-1] == "rc=2"
+    assert (store_sub / "deep.lua").read_text() == "deep\n"
+    assert (store_sub / "keep.lua").read_text() == "keep\n"
+    summary = _summary(tmp_path).lower()
+    assert "skip" in summary
+
+
 def test_capture_repo_updates_marker_on_new_origin(tmp_path: Path, origin_repo: Path):
     store = tmp_path / "store"
     make_marker(store, "git@example.com:me/old.git", branch="main")
