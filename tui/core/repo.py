@@ -259,7 +259,19 @@ def sync_to_system(system_path: Path, spec: RepoSpec) -> SyncResult:
             return SyncResult("cloned", f"Replaced non-repo {system_path} (backup: {backup})")
         return SyncResult("failed", f"Clone of {spec.url} failed (backup: {backup})")
 
-    state = status(system_path, spec, fetch=True)
+    # R30: status()'s own fetch=True discards git fetch's exit code, so an
+    # unreachable remote (no network, origin gone) fell through to whatever
+    # ahead_behind() computed from stale/absent remote refs — reporting a
+    # repo that was never actually reached as merely "up to date". The sync
+    # path needs to see that failure, so it fetches here itself and bails
+    # before asking status() for the (now offline) classification. Deliberately
+    # not a tenth RepoStatus value: reachability only matters to the sync
+    # path, not to the offline list/status-bar refresh, so it stays local to
+    # this SyncResult rather than rippling through classify()/ALL_STATUSES.
+    rc, _ = _git(["fetch", "--quiet", "origin"], cwd=system_path)
+    if rc != 0:
+        return SyncResult("skipped", f"{system_path}: remote unreachable ({spec.url})")
+    state = status(system_path, spec, fetch=False)
     if state == "wrong_origin":
         return SyncResult("skipped", f"{system_path}: origin differs from .ttgit")
     if state in ("dirty", "diverged"):

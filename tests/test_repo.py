@@ -328,6 +328,24 @@ def test_sync_resets_dirty_repo_when_force_is_set(clone: Path, origin_repo: Path
     assert not (clone / "junk.txt").exists()
 
 
+def test_sync_skips_when_remote_is_unreachable(clone: Path, origin_repo: Path):
+    """R30: a `git fetch` failure (no network, origin gone) must not fall
+    through to whatever ahead_behind() computes from stale/absent remote
+    refs — that used to report a repo that was never actually reached as
+    merely 'up to date'. Deleting the bare origin after cloning (mirroring
+    the bash-side test) reproduces 'remote unreachable' fully offline: no
+    real network is ever touched."""
+    import shutil
+    shutil.rmtree(origin_repo)
+
+    before = (clone / "README.md").read_text()
+    result = sync_to_system(clone, RepoSpec(url=str(origin_repo), branch="main"))
+
+    assert result.action == "skipped"
+    assert str(origin_repo) in result.message
+    assert (clone / "README.md").read_text() == before
+
+
 def test_sync_skips_on_origin_mismatch(clone: Path):
     before = (clone / "README.md").read_text()
     result = sync_to_system(clone, RepoSpec(url="git@example.com:other.git", branch="main"))
