@@ -17,8 +17,56 @@ You have a config file (e.g. `~/.config/starship.toml`) that you want to manage 
     ```
 2. Add to `files.conf`:
     ```
-    starship.toml:.config/starship.toml
+    starship.toml;.config/starship.toml
     ```
+
+## Track a git repository instead of copying it
+
+You have a directory under `~` that is itself a git repository (e.g.
+`~/.config/nvim`) and want ToolTamer to keep it up to date via `git
+clone`/`git pull` instead of mirroring its files — and its `.git`
+directory — into the ToolTamer store.
+
+1. Open `tt` (or `tt --admin`) → **File Manager**, then press `n` and pick
+   the repository's root directory. With `fzf`/`fd` installed you get a
+   fuzzy picker over everything under `~`; without them, a directory-tree
+   browser.
+2. ToolTamer detects that the path is the root of a git repository (with
+   an `origin` remote) and asks whether to **track as repo** or **copy
+   contents**. Picking a plain file, or a directory that is not itself a
+   repo root, skips this and adds it normally.
+3. Choose **Track as repo**. ToolTamer records the detected `origin` URL
+   and current branch in a `.ttgit` marker and adds the usual `files.conf`
+   entry — the store then holds only that marker, never the repository's
+   contents.
+
+From then on, `a` (apply TT → system) clones the repository where it's
+missing and fast-forwards it where it's behind; `u` (save) only ever
+refreshes the marker's `url`/`branch` from the system, never its content.
+See [Git repositories](configuration.md#git-repositories) for the full
+sync behavior and its limits.
+
+## Convert an already-tracked directory into a repo entry
+
+You already copy a directory into ToolTamer the normal way, and only
+later turned it into (or noticed it already is) a git repository on your
+system.
+
+1. Select the entry in the file manager and press `g`. This is only
+   offered when the tracked entry is a directory, is not already a repo
+   entry, and `~/<target>` on your system is currently the root of a git
+   repository.
+2. A confirmation dialog shows the detected `origin` URL and branch, and
+   how many stored files will be removed from the ToolTamer store once
+   the entry becomes a marker-only repo entry. Your system copy is never
+   touched by this step.
+3. Confirm with `y`. ToolTamer deletes the entry's stored content and
+   writes a `.ttgit` marker in its place; `files.conf` itself does not
+   change.
+
+If a tracked directory's system side is detected as a git repository root
+but hasn't been converted, the detail pane says so and reminds you that
+`g` will do it.
 
 ## Move a config file between configs
 
