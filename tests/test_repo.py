@@ -37,6 +37,15 @@ def test_read_marker_without_url_yields_empty_url(tmp_path: Path):
     assert spec.url == ""
 
 
+def test_read_marker_keys_are_case_sensitive(tmp_path: Path):
+    """The bash parser in bin/include.sh matches keys case-sensitively, so
+    Python must too — otherwise the two disagree on the same file."""
+    (tmp_path / MARKER_NAME).write_text("URL = git@example.com:me/r.git\n")
+    spec = read_marker(tmp_path)
+    assert spec is not None
+    assert spec.url == ""
+
+
 def test_write_marker_roundtrips(tmp_path: Path):
     spec = RepoSpec(url="git@github.com:me/r.git", branch="dev", force=True)
     write_marker(tmp_path, spec)

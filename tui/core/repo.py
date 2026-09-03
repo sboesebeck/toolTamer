@@ -43,7 +43,7 @@ def read_marker(store_dir: Path) -> RepoSpec | None:
         if not line or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        values[key.strip().lower()] = value.strip()
+        values[key.strip()] = value.strip()
     branch = values.get("branch") or None
     return RepoSpec(
         url=values.get("url", ""),
@@ -208,6 +208,10 @@ def sync_to_system(system_path: Path, spec: RepoSpec) -> SyncResult:
         return SyncResult("failed", f"Clone of {spec.url} failed")
 
     if detect(system_path) is None:
+        # .ttbak is a single-slot scratch backup, same convention as
+        # syncDirToSystem/syncFile in bin/include.sh and bin/tt: a stale
+        # one is replaced rather than kept around forever. The live tree
+        # itself is never destroyed here — it is moved aside, not deleted.
         backup = system_path.with_name(system_path.name + ".ttbak")
         if backup.exists():
             shutil.rmtree(backup, ignore_errors=True)
