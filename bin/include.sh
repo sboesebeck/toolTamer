@@ -214,6 +214,11 @@ function syncDirToSystem() {
 function captureDirFromSystem() {
   local sysdir="$1"
   local gitdir="$2"
+  if isRepoEntry "$gitdir"; then
+    # Repo entries hold a marker, not content — mirroring would destroy it.
+    captureRepoFromSystem "$sysdir" "$gitdir"
+    return $?
+  fi
   if [ -e "$gitdir" ] && [ ! -d "$gitdir" ]; then
     rm -f "$gitdir"
   fi
@@ -395,6 +400,51 @@ function syncRepoToSystem() {
     return
   fi
   log "${GN}Ok${RESET}"
+}
+
+# Capture a repo entry from the system (system -> TT): refresh url/branch
+# in the marker. Never captures content, never removes the marker.
+# Returns 0 when the marker changed, 1 when unchanged, 2 on error.
+function captureRepoFromSystem() {
+  local sysdir="$1" gitdir="$2"
+  local url branch force
+  url=$(readRepoSpec "$gitdir" url)
+  branch=$(readRepoSpec "$gitdir" branch)
+  force=$(readRepoSpec "$gitdir" force)
+
+  if [ -z "$(ttGitTopLevel "$sysdir")" ]; then
+    warn "$sysdir is no longer a git repository root - marker left unchanged"
+    note "Skipped repo capture (not a repo)" "$sysdir"
+    return 2
+  fi
+
+  local new_url new_branch
+  new_url=$(git -C "$sysdir" remote get-url origin 2>/dev/null)
+  new_branch=$(git -C "$sysdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  if [ -z "$new_url" ]; then
+    warn "$sysdir has no origin remote - marker left unchanged"
+    note "Skipped repo capture (no origin)" "$sysdir"
+    return 2
+  fi
+  if [ "$new_branch" = "HEAD" ]; then
+    new_branch=""
+  fi
+
+  if [ "$new_url" = "$url" ] && [ "$new_branch" = "$branch" ]; then
+    return 1
+  fi
+
+  {
+    echo "url    = $new_url"
+    if [ -n "$new_branch" ]; then
+      echo "branch = $new_branch"
+    fi
+    if [ "$force" = "true" ]; then
+      echo "force  = true"
+    fi
+  } >"$gitdir/$TTGIT_MARKER"
+  note "Updated repo marker" "$sysdir ($new_url${new_branch:+, branch $new_branch})"
+  return 0
 }
 
 function getInstalledPackages() {

@@ -277,3 +277,72 @@ def test_sync_file_routes_repo_entries_away_from_mirror(tmp_path: Path, origin_r
 
     assert (target / "README.md").is_file()
     assert (target / ".git").exists()
+
+
+def test_capture_repo_updates_marker_on_new_origin(tmp_path: Path, origin_repo: Path):
+    store = tmp_path / "store"
+    make_marker(store, "git@example.com:me/old.git", branch="main")
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+
+    result = run_bash(f'captureRepoFromSystem "{target}" "{store}"; echo "rc=$?"', tmp_path)
+
+    assert "rc=0" in result.stdout
+    marker = (store / ".ttgit").read_text()
+    assert str(origin_repo) in marker
+    assert "branch = main" in marker
+
+
+def test_capture_repo_is_a_noop_when_marker_matches(tmp_path: Path, origin_repo: Path):
+    store = tmp_path / "store"
+    make_marker(store, str(origin_repo), branch="main")
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+    before = (store / ".ttgit").read_text()
+
+    result = run_bash(f'captureRepoFromSystem "{target}" "{store}"; echo "rc=$?"', tmp_path)
+
+    assert "rc=1" in result.stdout
+    assert (store / ".ttgit").read_text() == before
+
+
+def test_capture_repo_preserves_force_flag(tmp_path: Path, origin_repo: Path):
+    store = tmp_path / "store"
+    make_marker(store, "git@example.com:me/old.git", branch="main", force=True)
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+
+    run_bash(f'captureRepoFromSystem "{target}" "{store}"', tmp_path)
+
+    assert "force  = true" in (store / ".ttgit").read_text()
+
+
+def test_capture_repo_leaves_marker_when_target_is_not_a_repo(tmp_path: Path):
+    store = tmp_path / "store"
+    make_marker(store, "git@example.com:me/r.git")
+    target = tmp_path / "sys" / "nvim"
+    target.mkdir(parents=True)
+    before = (store / ".ttgit").read_text()
+
+    result = run_bash(f'captureRepoFromSystem "{target}" "{store}"; echo "rc=$?"', tmp_path)
+
+    assert "rc=2" in result.stdout
+    assert (store / ".ttgit").read_text() == before
+
+
+def test_capture_dir_from_system_refuses_to_overwrite_a_marker(tmp_path: Path):
+    """Regression: without a guard, mirrorDir would replace .ttgit with the
+    repo's contents."""
+    store = tmp_path / "store"
+    make_marker(store, "git@example.com:me/r.git")
+    target = tmp_path / "sys" / "nvim"
+    target.mkdir(parents=True)
+    (target / "init.lua").write_text("-- content\n")
+
+    run_bash(f'captureDirFromSystem "{target}" "{store}"', tmp_path)
+
+    assert (store / ".ttgit").is_file()
+    assert not (store / "init.lua").exists()
