@@ -149,17 +149,52 @@ function listDirExtras() {
   done
 }
 
+# True when every file/directory under $1 can be enumerated: readable
+# and searchable at its own top level AND with no permission error
+# anywhere further down. A directory can pass a plain [-r]/[-x] check on
+# itself while still containing an unreadable subdirectory — `find`
+# then silently omits that subtree instead of failing outright, which is
+# exactly what let listDirExtras see a mirror destination's counterparts
+# under it as "extra" and delete them. mirrorDir and its two callers
+# (syncDirToSystem, captureDirFromSystem) all use this one predicate so
+# a bad subdirectory is reported once, as a clean skip, rather than
+# falling through to a confusing partial failure further down.
+function dirFullyReadable() {
+  local dir="$1"
+  [ -r "$dir" ] && [ -x "$dir" ] || return 1
+  local enum_err
+  enum_err=$(cd "$dir" && find . \( -type f -o -type l \) 2>&1 >/dev/null)
+  [ -z "$enum_err" ]
+}
+
 # Mirror directory $1 into $2: full copy including deletion of files that
 # are not present in the source. Uses rsync when available.
+#
+# Refuses to run at all when $1 cannot be fully read (see
+# dirFullyReadable): the manual fallback below builds its file list from
+# `find "$src"`, which silently omits whatever it cannot read, and
+# listDirExtras would then see every missing file in $dst as "extra" and
+# delete it. That is true for ANY tracked directory, not only repo
+# entries, so the guard lives here rather than in a caller.
 function mirrorDir() {
   local src="$1"
   local dst="$2"
+  if ! dirFullyReadable "$src"; then
+    warn "$src could not be fully read - refusing to mirror (would empty $dst)"
+    return 1
+  fi
+
   mkdir -p "$dst" || return 1
   if command -v rsync >/dev/null 2>&1; then
     if rsync -a --delete "$src/" "$dst/"; then
       return 0
     fi
-    warn "rsync failed - falling back to manual mirror"
+    # rsync is installed and ran, so a nonzero exit here is a real
+    # failure (not the "rsync unavailable" case above) - falling back to
+    # the manual mirror below on a partial/failed run is exactly how a
+    # rsync-side problem used to turn into a manual-mirror deletion pass.
+    warn "rsync failed while mirroring $src -> $dst - refusing (a partial run must not delete anything on $dst)"
+    return 1
   fi
   (cd "$src" && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') | while IFS= read -r f; do
     [ -z "$f" ] && continue
@@ -183,6 +218,12 @@ function syncDirToSystem() {
   local gitdir="$1"
   local sysdir="$2"
   logn "Comparing dir ${GN}$sysdir${RESET} <-> ${BL}${gitdir##$BASE/configs/}${RESET}....."
+  if ! dirFullyReadable "$gitdir"; then
+    log "${RD}not readable${RESET} - skipped"
+    warn "$gitdir could not be fully read - $sysdir left untouched"
+    note "Skipped directory sync (unreadable source)" "$sysdir"
+    return
+  fi
   if [ -e "$sysdir" ] && [ ! -d "$sysdir" ]; then
     log "${YL}target exists as file${RESET} - backing up, replacing with directory"
     rm -rf "$sysdir.ttbak"
@@ -214,6 +255,16 @@ function syncDirToSystem() {
 function captureDirFromSystem() {
   local sysdir="$1"
   local gitdir="$2"
+  if isRepoEntry "$gitdir"; then
+    # Repo entries hold a marker, not content — mirroring would destroy it.
+    captureRepoFromSystem "$sysdir" "$gitdir"
+    return $?
+  fi
+  if ! dirFullyReadable "$sysdir"; then
+    warn "$sysdir could not be fully read - $gitdir left untouched"
+    note "Skipped directory capture (unreadable source)" "$sysdir"
+    return 2
+  fi
   if [ -e "$gitdir" ] && [ ! -d "$gitdir" ]; then
     rm -f "$gitdir"
   fi
@@ -231,6 +282,261 @@ function captureDirFromSystem() {
     return 2
   }
   return 0
+}
+
+# --- git-repo entries -------------------------------------------------
+#
+# A tracked directory whose store side holds only a .ttgit marker is a
+# repo entry: ToolTamer records where the repository comes from and syncs
+# it with clone/pull instead of mirroring contents. See
+# tui/core/repo.py for the Python side — both parsers must agree.
+
+TTGIT_MARKER=".ttgit"
+
+# True when the store entry $1 holds a repo marker instead of content.
+# Fails CLOSED: anything that exists at the marker path — a directory, an
+# unreadable file, a broken symlink — counts as a repo entry too, so it
+# can never fall through to mirrorDir. readRepoSpec's own [ -f ] check
+# then reports it as a broken marker (empty url) rather than mirroring.
+function isRepoEntry() {
+  [ -e "$1/$TTGIT_MARKER" ] || [ -L "$1/$TTGIT_MARKER" ]
+}
+
+# readRepoSpec <storedir> <key> -- prints the value, empty when unset.
+# Values must not contain '#'; everything from the first '#' is a comment.
+# A repeated key takes its LAST occurrence, matching tui/core/repo.py's
+# read_marker (a dict keyed by name — later assignment wins).
+function readRepoSpec() {
+  local marker="$1/$TTGIT_MARKER"
+  [ -f "$marker" ] || return 1
+  sed -e 's/#.*$//' "$marker" |
+    grep -E "^[[:space:]]*$2[[:space:]]*=" |
+    tail -1 |
+    cut -f2- -d= |
+    sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+# Prints the repository root of $1, or nothing when $1 is not a repo root.
+# A subdirectory of a repo prints nothing: only roots are trackable.
+function ttGitTopLevel() {
+  local dir="$1"
+  [ -d "$dir" ] || return 1
+  command -v git >/dev/null 2>&1 || return 1
+  local top
+  top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || return 1
+  [ -n "$top" ] || return 1
+  local resolved_dir resolved_top
+  resolved_dir=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
+  resolved_top=$(cd "$top" 2>/dev/null && pwd -P) || return 1
+  [ "$resolved_dir" = "$resolved_top" ] || return 1
+  echo "$resolved_top"
+}
+
+# ttGitClone <url> <branch> <target>
+# On failure, leaves git's stderr in $TTGIT_CLONE_ERROR (and logs it via
+# logf) so callers can report the actual cause instead of a bare "failed".
+function ttGitClone() {
+  local url="$1" branch="$2" target="$3"
+  mkdir -p "$(dirname "$target")"
+  local out rc
+  if [ -n "$branch" ]; then
+    out=$(git clone --quiet --branch "$branch" "$url" "$target" 2>&1)
+  else
+    out=$(git clone --quiet "$url" "$target" 2>&1)
+  fi
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    TTGIT_CLONE_ERROR="$out"
+    logf "git clone $url -> $target failed: $out"
+  else
+    TTGIT_CLONE_ERROR=""
+  fi
+  return "$rc"
+}
+
+# Sync a repo entry from the TT store to the system (TT -> system).
+# Never destroys local work unless the marker sets force = true.
+function syncRepoToSystem() {
+  local gitdir="$1" sysdir="$2"
+  local url branch force
+  url=$(readRepoSpec "$gitdir" url)
+  branch=$(readRepoSpec "$gitdir" branch)
+  force=$(readRepoSpec "$gitdir" force)
+
+  logn "Comparing repo ${GN}$sysdir${RESET} <-> ${BL}${gitdir##$BASE/configs/}${RESET}....."
+
+  if [ -z "$url" ]; then
+    log "${RD}broken .ttgit${RESET} (no url)"
+    note "Broken repo entry" "$sysdir (.ttgit has no url)"
+    return 1
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    log "${YL}git not installed${RESET}"
+    note "Skipped repo (no git)" "$sysdir"
+    return 1
+  fi
+
+  if [ ! -e "$sysdir" ]; then
+    log "${YL}not cloned yet${RESET} - cloning"
+    if ttGitClone "$url" "$branch" "$sysdir"; then
+      note "Cloned repo" "$sysdir ($url)"
+    else
+      err "Clone of $url failed: ${TTGIT_CLONE_ERROR:-unknown error}"
+      note "Failed repo clone" "$sysdir ($url)"
+    fi
+    return
+  fi
+
+  if [ -z "$(ttGitTopLevel "$sysdir")" ]; then
+    log "${YL}not a git repo${RESET} - backing up, cloning"
+    rm -rf "$sysdir.ttbak"
+    mv "$sysdir" "$sysdir.ttbak"
+    if ttGitClone "$url" "$branch" "$sysdir"; then
+      note "Replaced non-repo with clone" "$sysdir (backup: $sysdir.ttbak)"
+    else
+      err "Clone of $url failed (backup kept at $sysdir.ttbak): ${TTGIT_CLONE_ERROR:-unknown error}"
+      note "Failed repo clone" "$sysdir (backup: $sysdir.ttbak)"
+    fi
+    return
+  fi
+
+  local origin
+  origin=$(git -C "$sysdir" remote get-url origin 2>/dev/null)
+  if [ "$origin" != "$url" ]; then
+    log "${RD}origin mismatch${RESET} ($origin) - skipped"
+    warn "$sysdir tracks $origin but ToolTamer expects $url"
+    note "Skipped repo (origin mismatch)" "$sysdir"
+    return 1
+  fi
+
+  # I4: everything below compares against origin/$branch, while `pull
+  # --ff-only` and `reset --hard` act on whatever branch is checked out. A
+  # user on a side branch was therefore permanently reported as diverged,
+  # and with force = true the reset ran on that side branch and orphaned
+  # their commits. Refuse instead; checking out $branch for them would
+  # discard the context they are working in without asking. Same check, same
+  # position, in tui/core/repo.py's status()/sync_to_system.
+  if [ -n "$branch" ]; then
+    local head_branch
+    head_branch=$(git -C "$sysdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [ "$head_branch" != "$branch" ]; then
+      log "${RD}branch mismatch${RESET} ($head_branch) - skipped"
+      warn "$sysdir is on branch $head_branch but .ttgit names $branch - not touched (check out $branch, or update the marker)"
+      note "Skipped repo (branch mismatch)" "$sysdir"
+      return 1
+    fi
+  fi
+
+  if ! git -C "$sysdir" fetch --quiet origin 2>/dev/null; then
+    log "${YL}remote unreachable${RESET}"
+    note "Repo unreachable" "$sysdir ($url)"
+    return 1
+  fi
+
+  if [ -z "$branch" ]; then
+    branch=$(git -C "$sysdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  fi
+
+  local dirty=0
+  if [ -n "$(git -C "$sysdir" status --porcelain 2>/dev/null)" ]; then
+    dirty=1
+  fi
+
+  local counts ahead behind
+  counts=$(git -C "$sysdir" rev-list --left-right --count "HEAD...origin/$branch" 2>/dev/null)
+  ahead=$(echo "$counts" | awk '{print $1+0}')
+  behind=$(echo "$counts" | awk '{print $2+0}')
+
+  if [ "$dirty" -eq 1 ] || { [ "$ahead" -gt 0 ] && [ "$behind" -gt 0 ]; }; then
+    # Case-insensitive, matching tui/core/repo.py's spec.force (.lower() == "true").
+    if [ "$(printf '%s' "$force" | tr '[:upper:]' '[:lower:]')" != true ]; then
+      log "${YL}local changes${RESET} - skipped"
+      warn "$sysdir has local changes - not touched (set force = true in .ttgit to override)"
+      note "Skipped repo (local changes)" "$sysdir"
+      return 1
+    fi
+    log "${YL}local changes${RESET} - resetting (force)"
+    if git -C "$sysdir" reset --hard "origin/$branch" >/dev/null 2>&1 &&
+      git -C "$sysdir" clean -fd >/dev/null 2>&1; then
+      note "Reset repo to remote" "$sysdir (origin/$branch)"
+    else
+      err "Reset of $sysdir failed"
+      note "Failed repo reset" "$sysdir"
+    fi
+    return
+  fi
+
+  if [ "$behind" -gt 0 ]; then
+    log "${YL}behind by $behind${RESET} - pulling"
+    if git -C "$sysdir" pull --quiet --ff-only >/dev/null 2>&1; then
+      note "Updated repo" "$sysdir"
+    else
+      err "Pull of $sysdir failed"
+      note "Failed repo pull" "$sysdir"
+    fi
+    return
+  fi
+
+  if [ "$ahead" -gt 0 ]; then
+    log "${GN}Ok${RESET} ($ahead local commit(s) not pushed)"
+    return
+  fi
+  log "${GN}Ok${RESET}"
+}
+
+# Capture a repo entry from the system (system -> TT): refresh url/branch
+# in the marker. Never captures content, never removes the marker.
+# Returns 0 when the marker changed, 1 when unchanged, 2 on error.
+function captureRepoFromSystem() {
+  local sysdir="$1" gitdir="$2"
+  local url branch force
+  url=$(readRepoSpec "$gitdir" url)
+  branch=$(readRepoSpec "$gitdir" branch)
+  force=$(readRepoSpec "$gitdir" force)
+
+  if [ -z "$(ttGitTopLevel "$sysdir")" ]; then
+    warn "$sysdir is no longer a git repository root - marker left unchanged"
+    note "Skipped repo capture (not a repo)" "$sysdir"
+    return 2
+  fi
+
+  local new_url new_branch
+  new_url=$(git -C "$sysdir" remote get-url origin 2>/dev/null)
+  new_branch=$(git -C "$sysdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  if [ -z "$new_url" ]; then
+    warn "$sysdir has no origin remote - marker left unchanged"
+    note "Skipped repo capture (no origin)" "$sysdir"
+    return 2
+  fi
+  if [ "$new_branch" = "HEAD" ]; then
+    new_branch=""
+  fi
+
+  if [ "$new_url" = "$url" ] && [ "$new_branch" = "$branch" ]; then
+    return 1
+  fi
+
+  # Guard the redirect: if $TTGIT_MARKER is itself a directory (a broken
+  # marker isRepoEntry now routes here instead of to mirrorDir), the
+  # redirect fails and nothing must be reported as written.
+  if {
+    echo "url    = $new_url"
+    if [ -n "$new_branch" ]; then
+      echo "branch = $new_branch"
+    fi
+    # Case-insensitive, matching the fold in syncRepoToSystem and
+    # tui/core/repo.py's spec.force (.lower() == "true").
+    if [ "$(printf '%s' "$force" | tr '[:upper:]' '[:lower:]')" = true ]; then
+      echo "force  = true"
+    fi
+  } 2>/dev/null >"$gitdir/$TTGIT_MARKER"; then
+    note "Updated repo marker" "$sysdir ($new_url${new_branch:+, branch $new_branch})"
+    return 0
+  else
+    warn "$gitdir/$TTGIT_MARKER could not be written - marker left unchanged"
+    note "Skipped repo capture (marker not writable)" "$sysdir"
+    return 2
+  fi
 }
 
 function getInstalledPackages() {

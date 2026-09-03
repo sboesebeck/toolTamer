@@ -280,6 +280,11 @@ function syncFile() {
   fi
 
   if [ -d "$gitfile" ]; then
+    if isRepoEntry "$gitfile"; then
+      # Tracked git repo: clone/pull, never mirror
+      syncRepoToSystem "$gitfile" "$dotfile"
+      return
+    fi
     # Tracked directory: full mirror TT -> system including deletions
     syncDirToSystem "$gitfile" "$dotfile"
     return
@@ -563,11 +568,19 @@ function updatingTTFromSystemFiles() {
       continue
     fi
     if [ -d "$dotfile" ]; then
+      local was_repo=0
+      if isRepoEntry "$gitfile"; then
+        was_repo=1
+      fi
       captureDirFromSystem "$dotfile" "$gitfile"
       case $? in
       0)
-        log "  ${GN}Captured${RESET} dir ${dotfile#$HOME/} -> ${gitfile##$BASE/configs/}"
-        note "Captured into ToolTamer" "$dotfile (directory)"
+        if [ "$was_repo" -eq 1 ]; then
+          log "  ${GN}Updated${RESET} repo marker for ${dotfile#$HOME/}"
+        else
+          log "  ${GN}Captured${RESET} dir ${dotfile#$HOME/} -> ${gitfile##$BASE/configs/}"
+          note "Captured into ToolTamer" "$dotfile (directory)"
+        fi
         ((updated = updated + 1))
         ;;
       2)

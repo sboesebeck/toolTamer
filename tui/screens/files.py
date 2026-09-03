@@ -21,8 +21,10 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
-from tui.core.config import TTConfig, dir_diff, tree_hash, tree_signature
+from tui.core import repo as repo_mod
+from tui.core.config import TTConfig, dir_diff, dir_fully_readable, tree_hash, tree_signature
 from tui.core.diff_render import render_changed_diffs
+from tui.core.repo import RepoSpec
 from tui.core.system import SystemInfo
 
 
@@ -32,6 +34,25 @@ def _dir_deletions(source: Path, dest: Path) -> list[str]:
     if not (dest.exists() and dest.is_dir() and source.exists() and source.is_dir()):
         return []
     return dir_diff(source, dest)[1]
+
+
+# repo_mod.classify() owns the RepoStatus -> bucket mapping (synced/changed/
+# missing/broken). These two dicts are display-only, mapping each bucket to
+# what this screen already renders for it — a display-status label sharing
+# a colour with the plain-file states below, and the list token — so the
+# bucket mapping itself is defined exactly once, in tui/core/repo.py.
+_BUCKET_TO_STATUS = {
+    "synced": "ok",
+    "changed": "modified",
+    "missing": "missing_system",
+    "broken": "missing_repo",
+}
+_BUCKET_TO_TOKEN = {
+    "synced": "OK",
+    "changed": "!!",
+    "missing": "--",
+    "broken": "??",
+}
 
 
 class FileScreen(Screen):
@@ -44,6 +65,7 @@ class FileScreen(Screen):
         ("r", "remove_from_tt", "Remove"),
         ("m", "move_file", "Move"),
         ("n", "add_file", "Add File"),
+        ("g", "convert_to_repo", "To repo"),
         ("slash", "focus_search", "Search"),
         ("tab", "switch_pane", "Switch Pane"),
     ]
@@ -54,6 +76,9 @@ class FileScreen(Screen):
         self._system = system
         # tree-hash cache: path -> (stat signature, content hash)
         self._tree_cache: dict[str, tuple[str, str]] = {}
+        # rows built by the last _load_files pass, so filtering can re-render
+        # without recomputing every entry's status
+        self._rows: list[tuple[str, Text, Text, Text, str]] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -92,21 +117,47 @@ class FileScreen(Screen):
         log.write(Text("  Esc  Back", style="dim"))
 
     def _load_files(self, filter_text: str = "") -> None:
+        self._rows = self._build_rows()
+        self._render_rows(filter_text)
+
+    def _render_rows(self, filter_text: str = "") -> None:
+        """Draw the rows built by the last _build_rows() pass, applying the
+        filter. Pure display: no status computation, no git, no file I/O."""
         table = self.query_one("#file-table", DataTable)
         table.clear()
+        filt = filter_text.lower().strip()
+        for searchable, st, target_text, cfg_text, key in self._rows:
+            if filt and filt not in searchable:
+                continue
+            table.add_row(st, target_text, cfg_text, key=key)
+
+    def _build_rows(self) -> list[tuple[str, Text, Text, Text, str]]:
+        """Compute every row: (searchable text, status, target, config, key).
+
+        This is the expensive half — tree hashes for directory entries,
+        repo_mod.status() for repo entries — so it is kept apart from
+        rendering, which the filter box drives on every keystroke."""
+        rows: list[tuple[str, Text, Text, Text, str]] = []
         host = self._system.hostname
         mappings = self._tt_config.get_effective_file_mappings(host)
         home = Path.home()
-        filt = filter_text.lower().strip()
         # Sort: by effective target, effective entries before shadowed ones
         for m in sorted(mappings, key=lambda x: (x.effective_target, not x.is_effective)):
             eff_target = m.effective_target
             sys_file = home / eff_target
-            status = self._file_status(m.repo_path, sys_file)
+            spec = m.repo
+            if spec is not None:
+                repo_state = repo_mod.status(sys_file, spec)
+                status = _BUCKET_TO_STATUS[repo_mod.classify(repo_state)]
+            else:
+                repo_state = None
+                status = self._file_status(m.repo_path, sys_file)
 
             self_shadow = (not m.is_effective) and m.shadowed_by == m.config
             if not m.is_effective:
                 status_token = "==" if self_shadow else "<<"
+            elif repo_state is not None:
+                status_token = self._repo_status_token(repo_state)
             else:
                 status_token = {
                     "ok": "OK",
@@ -116,10 +167,7 @@ class FileScreen(Screen):
                 }.get(status, "??")
 
             # Filter matches status code, path, or config name
-            if filt:
-                searchable = f"{status_token} ~/{eff_target} {m.config}".lower()
-                if filt not in searchable:
-                    continue
+            searchable = f"{status_token} ~/{eff_target} {m.config}".lower()
 
             st = Text(status_token)
             if self_shadow:
@@ -134,6 +182,8 @@ class FileScreen(Screen):
                 st.stylize("red")
 
             target_text = Text(f"~/{eff_target}")
+            if spec is not None:
+                target_text.append(f"  ⎇ {spec.branch or 'HEAD'}", style="dim cyan")
             cfg_text = Text(m.config)
             if not m.is_effective:
                 target_text.stylize("dim")
@@ -145,12 +195,11 @@ class FileScreen(Screen):
             else:
                 cfg_text.stylize("blue")
 
-            table.add_row(
-                st,
-                target_text,
-                cfg_text,
-                key=f"{m.config}:{m.stored}:{m.target}",
-            )
+            rows.append((
+                searchable, st, target_text, cfg_text,
+                f"{m.config}:{m.stored}:{m.target}",
+            ))
+        return rows
 
     def _refresh_files(self) -> None:
         current_filter = self.query_one("#file-filter", Input).value
@@ -158,7 +207,11 @@ class FileScreen(Screen):
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "file-filter":
-            self._load_files(filter_text=event.value)
+            # Filtering re-renders the rows the last pass built; it must not
+            # recompute them. _build_rows() runs repo_mod.status() per repo
+            # entry — six git subprocesses, ~38 ms each — and this fires on
+            # every keystroke.
+            self._render_rows(event.value)
 
     def _cached_tree_hash(self, root: Path) -> str:
         key = str(root)
@@ -169,6 +222,105 @@ class FileScreen(Screen):
         h = tree_hash(root)
         self._tree_cache[key] = (sig, h)
         return h
+
+    @staticmethod
+    def _repo_status_token(state: str) -> str:
+        return _BUCKET_TO_TOKEN[repo_mod.classify(state)]
+
+    @staticmethod
+    def _repo_detail_lines(
+        spec: RepoSpec, sys_path: Path, store_path: Path | None = None
+    ) -> list[tuple[str, str]]:
+        """Detail-pane content for a repo entry: the clone spec plus the
+        current local state. No file diff — the store holds no content."""
+        lines: list[tuple[str, str]] = [("", "")]
+        lines.append(("Tracked as git repository", "bold cyan"))
+        lines.append((f"  url    {spec.url or '(missing — .ttgit has no url)'}",
+                      "" if spec.url else "bold red"))
+        lines.append((f"  branch {spec.branch or '(remote HEAD)'}", ""))
+        if spec.force:
+            lines.append(("  force  true — local changes are discarded on sync", "yellow"))
+        lines.append(("", ""))
+
+        # Spec §5: a marker directory holding anything besides .ttgit — a
+        # leftover snapshot from before the conversion, say — has that content
+        # ignored by both engines. The ignoring was implemented; the "einmalig
+        # gemeldet" half was not, so the files sat there invisibly. The detail
+        # pane is where the user is already looking at this entry.
+        if store_path is not None:
+            from tui.core.config import iter_tree_files
+            extras = sorted(
+                rel for rel, _ in iter_tree_files(store_path)
+                if rel != repo_mod.MARKER_NAME
+            )
+            if extras:
+                lines.append((
+                    f"{len(extras)} file(s) stored beside .ttgit are ignored "
+                    f"— ToolTamer syncs this entry with git only:", "yellow",
+                ))
+                for rel in extras[:10]:
+                    lines.append((f"  {rel}", "dim"))
+                if len(extras) > 10:
+                    lines.append((f"  ... and {len(extras) - 10} more", "dim"))
+                lines.append(("", ""))
+
+        if not spec.url:
+            lines.append(("Entry is broken: .ttgit has no url. Sync skips it.", "bold red"))
+            return lines
+
+        state = repo_mod.status(sys_path, spec)
+        descriptions = {
+            "ok": ("Up to date with the remote.", "green"),
+            "ahead": ("Local commits not pushed — ToolTamer does not push.", "yellow"),
+            "behind": ("Behind the remote — 'a' fast-forwards.", "yellow"),
+            "dirty": ("Uncommitted changes — sync skips this repo.", "bold yellow"),
+            "diverged": ("Diverged from the remote — sync skips this repo.", "bold yellow"),
+            "missing": ("Not cloned yet — 'a' clones it.", "red"),
+            "not_a_repo": ("Path exists but is not a git repository root.", "bold red"),
+            "wrong_origin": ("origin differs from .ttgit — sync skips this repo.", "bold red"),
+            "wrong_branch": ("A different branch is checked out — sync skips this repo.", "bold red"),
+            "invalid_spec": (".ttgit has no url.", "bold red"),
+        }
+        text, style = descriptions.get(state, (f"Unknown state: {state}", "red"))
+        lines.append((f"Status: {state} — {text}", style))
+
+        if state == "wrong_branch":
+            head = repo_mod.current_branch(sys_path)
+            lines.append((
+                f"  on {head or 'a detached HEAD'}, .ttgit names {spec.branch}",
+                "bold red",
+            ))
+            lines.append((
+                f"  check out {spec.branch} here, or press 'u' to record the "
+                f"branch you are on", "dim",
+            ))
+
+        if state in ("missing", "invalid_spec"):
+            return lines
+
+        # Same branch status() ranked the entry on. `spec.branch or "HEAD"`
+        # compared against origin/HEAD instead, so with no branch in the
+        # marker the pane could print "Behind the remote" above
+        # "0 ahead / 0 behind" — or, when the counts are both zero, above no
+        # counts at all.
+        ahead, behind = repo_mod.ahead_behind(
+            sys_path, repo_mod._effective_branch(sys_path, spec)
+        )
+        if ahead or behind:
+            lines.append((f"  {ahead} ahead / {behind} behind origin", "dim"))
+        rc, head = repo_mod._git(["rev-parse", "--short", "HEAD"], cwd=sys_path)
+        if rc == 0 and head:
+            lines.append((f"  HEAD {head}", "dim"))
+        rc, porcelain = repo_mod._git(["status", "--porcelain"], cwd=sys_path)
+        if rc == 0 and porcelain:
+            lines.append(("", ""))
+            lines.append(("Working tree:", "bold"))
+            for entry in porcelain.splitlines()[:20]:
+                lines.append((f"  {entry}", "dim"))
+            extra = len(porcelain.splitlines()) - 20
+            if extra > 0:
+                lines.append((f"  ... and {extra} more", "dim"))
+        return lines
 
     def _file_status(self, repo: Path, system: Path) -> str:
         if not repo.exists():
@@ -229,6 +381,24 @@ class FileScreen(Screen):
         self.app.call_from_thread(log.write, Text(f"~/{eff_target}", style="bold"))
         self.app.call_from_thread(log.write, Text(f"Config: {config}", style="cyan"))
         self.app.call_from_thread(log.write, Text(f"Stored as: {stored}", style="dim"))
+
+        from tui.core.repo import read_marker
+        spec = read_marker(repo_file)
+        if spec is not None:
+            for text, style in self._repo_detail_lines(spec, sys_file, repo_file):
+                self.app.call_from_thread(log.write, Text(text, style=style))
+            return
+
+        if repo_file.is_dir():
+            from tui.core.repo import detect as _detect
+            hint = _detect(sys_file)
+            if hint is not None:
+                self.app.call_from_thread(log.write, Text(
+                    f"This directory is a git repository ({hint.url}). "
+                    f"Press 'g' to track it as a repo instead of copying it.",
+                    style="bold yellow",
+                ))
+                self.app.call_from_thread(log.write, Text(""))
 
         # Identify shadowing relationships for this target
         all_for_target = [
@@ -436,6 +606,24 @@ class FileScreen(Screen):
         sys_file = Path.home() / eff_target
         if not repo_file.exists():
             return
+        if repo_file.is_dir() and (
+            not dir_fully_readable(repo_file)
+            or repo_mod.read_marker(repo_file) is not None
+        ):
+            # I2: the deletion preview below compares the store tree with the
+            # system tree, and for a repo entry the store holds exactly one
+            # file (.ttgit) while the system holds the whole clone — so every
+            # file in the repository, .git included, was listed as "would be
+            # deleted" under a "delete and apply" caption. _do_apply then
+            # routed to clone/pull and deleted nothing, which is precisely
+            # what makes it corrosive: a dialog that always cries wolf.
+            # Checked here, above the preview, exactly as action_save_change
+            # already does. An unreadable store dir is routed the same way
+            # because read_marker cannot be trusted to answer for it and
+            # _do_apply refuses outright — either way there is nothing to
+            # delete on the system side.
+            self._do_apply(config, stored, target)
+            return
         if repo_file.is_dir() and sys_file.is_dir():
             deletions = _dir_deletions(repo_file, sys_file)
             if deletions:
@@ -451,11 +639,58 @@ class FileScreen(Screen):
         self._do_apply(config, stored, target)
 
     def _do_apply(self, config: str, stored: str, target: str) -> None:
+        import os
         import shutil
         from tui.core.config import _resolve_effective_target
+        from tui.core.repo import read_marker, sync_to_system
         repo_file = self._tt_config.configs_dir / config / "files" / stored
         sys_file = Path.home() / _resolve_effective_target(stored, target)
         if not repo_file.exists():
+            return
+        if repo_file.is_dir() and not os.access(repo_file, os.R_OK | os.X_OK):
+            # R28: an unreadable store directory tells us nothing about what
+            # it holds. It may in fact be a repo entry whose .ttgit we simply
+            # cannot see — read_marker below stats a path *inside* repo_file,
+            # which needs search permission on repo_file itself, so on this
+            # Python/OS it raises PermissionError rather than politely
+            # reporting "no marker" (verified directly, not assumed — see
+            # the task report). Checked here, before read_marker is even
+            # called: sys_file is a normal, fully readable path, so
+            # shutil.rmtree(sys_file) below would succeed outright — deleting
+            # a possibly-real repository — before shutil.copytree(repo_file,
+            # ...) got anywhere near failing on the unreadable source. The
+            # guard belongs at this destructive step, not at the detector:
+            # no read_marker predicate can distinguish "empty directory" from
+            # "repo entry" when it cannot see inside repo_file at all.
+            self.notify(
+                f"Cannot read {repo_file} — store entry unreadable, skipped",
+                severity="error", timeout=8,
+            )
+            return
+        spec = read_marker(repo_file)
+        if spec is not None:
+            # A repo entry is synced with clone/pull, never mirrored via
+            # rmtree+copytree — that would destroy the user's real repo
+            # (and any uncommitted work in it) below.
+            result = sync_to_system(sys_file, spec)
+            severity = {"failed": "error", "skipped": "warning"}.get(result.action, "information")
+            self.notify(result.message, severity=severity, timeout=8)
+            self._refresh_files()
+            self._show_diff(config, stored, target)
+            return
+        if repo_file.is_dir() and not dir_fully_readable(repo_file):
+            # C1: the os.access() check above only sees the top level. A store
+            # dir that is readable there but holds an unreadable subdirectory
+            # gets past it, and then rmtree(sys_file) succeeds before
+            # copytree() raises shutil.Error on the subtree it cannot read —
+            # the system side is left half-deleted. bin/include.sh puts the
+            # same guard in mirrorDir, i.e. on the mirror path only; repo
+            # entries return above and never reach it, exactly as they never
+            # reach mirrorDir.
+            self.notify(
+                f"Cannot fully read {repo_file} — unreadable subdirectory, skipped",
+                severity="error", timeout=8,
+            )
             return
         if repo_file.is_dir():
             sys_file.parent.mkdir(parents=True, exist_ok=True)
@@ -470,6 +705,39 @@ class FileScreen(Screen):
             sys_file.write_bytes(repo_file.read_bytes())
         self._refresh_files()
         self._show_diff(config, stored, target)
+
+    def _save_repo_marker(self, config: str, stored: str, target: str) -> str:
+        """System -> TT for a repo entry: refresh url/branch in .ttgit.
+
+        Never captures content and never removes the marker."""
+        from tui.core.config import _resolve_effective_target
+        from tui.core.repo import current_branch, origin_url, read_marker, repo_root, write_marker
+
+        store = self._tt_config.configs_dir / config / "files" / stored
+        eff = _resolve_effective_target(stored, target)
+        sys_path = Path.home() / eff
+        current = read_marker(store)
+        if current is None:
+            return "Not a repo entry."
+        # I1: "not a repo root" and "no origin remote" are separate answers,
+        # as they are in captureRepoFromSystem. Collapsing them told the user
+        # a live repository was not a repository, which they cannot act on.
+        if repo_root(sys_path) is None:
+            return f"~/{eff} is not a git repository root — marker unchanged."
+        found_url = origin_url(sys_path)
+        if found_url is None:
+            return (
+                f"~/{eff} has no 'origin' remote — marker unchanged. "
+                f"ToolTamer records origin; add one or rename the remote back."
+            )
+        found_branch = current_branch(sys_path)
+        if found_url == current.url and found_branch == current.branch:
+            return "Marker already matches the system — nothing to save."
+        write_marker(store, RepoSpec(url=found_url, branch=found_branch, force=current.force))
+        return (
+            f"Updated .ttgit: url {found_url}"
+            + (f", branch {found_branch}" if found_branch else "")
+        )
 
     def action_save_change(self) -> None:
         """Unified save (merges the old 'capture' and 'override local').
@@ -488,6 +756,28 @@ class FileScreen(Screen):
         sys_file = Path.home() / eff_target
         repo_file = self._tt_config.configs_dir / config / "files" / stored
         host = self._system.hostname
+
+        import os as _os
+
+        from tui.core.repo import read_marker as _read_marker
+        if repo_file.is_dir() and not _os.access(repo_file, _os.R_OK | _os.X_OK):
+            # Same guard _do_apply carries, for the same reason: read_marker
+            # stats a path *inside* repo_file, so an unreadable store dir
+            # makes it raise PermissionError — here, straight out of a key
+            # handler. Report instead.
+            log = self.query_one("#file-diff", RichLog)
+            log.clear()
+            log.write(Text(
+                f"Cannot read {repo_file} — store entry unreadable, skipped",
+                style="bold red",
+            ))
+            return
+        if _read_marker(repo_file) is not None:
+            log = self.query_one("#file-diff", RichLog)
+            log.clear()
+            log.write(Text(self._save_repo_marker(config, stored, target), style="cyan"))
+            self._refresh_files()
+            return
 
         if config == host:
             # Already host-local: nothing to choose, just capture the system state.
@@ -564,6 +854,16 @@ class FileScreen(Screen):
         else:
             dest_config = config
             dest_path = self._tt_config.configs_dir / config / "files" / stored
+        if sys_path.is_dir() and not dir_fully_readable(sys_path):
+            # C1, capture direction: the store is the one that gets rmtree'd
+            # here, so an unreadable subtree on the system side would empty
+            # the stored copy and then fail. Same refusal as mirrorDir.
+            self.notify(
+                f"Cannot fully read {sys_path} — unreadable subdirectory, "
+                f"stored copy left untouched",
+                severity="error", timeout=8,
+            )
+            return
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         if sys_path.is_dir():
             if dest_path.exists():
@@ -640,6 +940,15 @@ class FileScreen(Screen):
         if not src_path.exists():
             return
         dest_path = self._tt_config.configs_dir / host / "files" / stored
+        if src_path.is_dir() and not dir_fully_readable(src_path):
+            # C1, store-to-store direction: the host config's copy is the
+            # victim of the rmtree below.
+            self.notify(
+                f"Cannot fully read {src_path} — unreadable subdirectory, "
+                f"local override left untouched",
+                severity="error", timeout=8,
+            )
+            return
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         if src_path.is_dir():
             if dest_path.exists():
@@ -668,12 +977,34 @@ class FileScreen(Screen):
             picked = self._pick_with_fzf()
             if picked is None:
                 return
+            self._continue_add(picked)
+        else:
+            self.app.push_screen(AddFileScreen(self._tt_config, self._system))
+
+    def _continue_add(self, picked: Path) -> None:
+        """Ask about repo tracking when `picked` is a repo root, then pick
+        the target config."""
+        spec = repo_mod.detect(picked)
+        if spec is None:
             self.app.push_screen(
                 AddConfigPickScreen(self._tt_config, self._system, picked),
                 callback=lambda _: self._refresh_files(),
             )
-        else:
-            self.app.push_screen(AddFileScreen(self._tt_config, self._system))
+            return
+
+        def _after(choice: str | None) -> None:
+            if choice is None:
+                return
+            self.app.push_screen(
+                AddConfigPickScreen(
+                    self._tt_config, self._system, picked,
+                    as_repo=(choice == "repo"),
+                    repo_spec=spec if choice == "repo" else None,
+                ),
+                callback=lambda _: self._refresh_files(),
+            )
+
+        self.app.push_screen(RepoTrackChoiceScreen(picked, spec), callback=_after)
 
     def _pick_with_fzf(self) -> Path | None:
         """Suspend the TUI, run fzf to pick a file or directory under ~, return
@@ -746,6 +1077,75 @@ class FileScreen(Screen):
         else:
             self.query_one("#file-table", DataTable).focus()
 
+    def _convertible(self, config: str, stored: str, target: str) -> RepoSpec | None:
+        """The RepoSpec for a tracked *directory* entry whose system side is
+        a git repo root and which is not already a repo entry. Else None."""
+        from tui.core.config import _resolve_effective_target
+
+        store = self._tt_config.configs_dir / config / "files" / stored
+        if repo_mod.read_marker(store) is not None:
+            return None
+        if not store.is_dir():
+            return None
+        sys_path = Path.home() / _resolve_effective_target(stored, target)
+        return repo_mod.detect(sys_path)
+
+    def _convert_blocked_reason(self, config: str, stored: str, target: str) -> str:
+        """Why `g` cannot convert this entry — one sentence the user can act on.
+
+        I1 knock-on: this used to be a single catch-all ("Only tracked
+        directories whose system path is a git repo root can be converted"),
+        which is plainly false for a directory that IS a repo root and merely
+        lacks an origin remote."""
+        from tui.core.config import _resolve_effective_target
+
+        store = self._tt_config.configs_dir / config / "files" / stored
+        eff = _resolve_effective_target(stored, target)
+        if repo_mod.read_marker(store) is not None:
+            return f"~/{eff} is already tracked as a git repo entry."
+        if not store.is_dir():
+            return f"~/{eff} is not a tracked directory — only directories can be converted."
+        sys_path = Path.home() / eff
+        if repo_mod.repo_root(sys_path) is None:
+            return f"~/{eff} is not a git repository root — nothing to convert it to."
+        if repo_mod.origin_url(sys_path) is None:
+            return (
+                f"~/{eff} is a git repository but has no 'origin' remote — "
+                f"ToolTamer needs one to record in .ttgit."
+            )
+        return f"~/{eff} cannot be converted."
+
+    def action_convert_to_repo(self) -> None:
+        sel = self._get_selected()
+        if not sel:
+            return
+        config, stored, target = sel
+        spec = self._convertible(config, stored, target)
+        if spec is None:
+            self.notify(
+                self._convert_blocked_reason(config, stored, target),
+                severity="warning", timeout=6,
+            )
+            return
+        store = self._tt_config.configs_dir / config / "files" / stored
+        from tui.core.config import _resolve_effective_target, iter_tree_files
+        count = sum(1 for _ in iter_tree_files(store))
+        eff = _resolve_effective_target(stored, target)
+
+        def _after(confirmed: bool | None) -> None:
+            if not confirmed:
+                return
+            report = self._tt_config.convert_to_repo(config, stored, spec)
+            for line in report:
+                self.notify(line, timeout=8)
+            self._tree_cache.clear()
+            self._refresh_files()
+            self._show_diff(config, stored, target)
+
+        self.app.push_screen(
+            ConvertToRepoScreen(eff, config, spec, count), callback=_after
+        )
+
 
 class ConfirmDeletionsScreen(ModalScreen[bool]):
     """Confirm a directory sync that would delete files on the destination."""
@@ -807,6 +1207,117 @@ class ConfirmDeletionsScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class ConvertToRepoScreen(ModalScreen[bool]):
+    """Confirm turning a tracked directory into a git-repo entry."""
+
+    BINDINGS = [("escape", "cancel", "Cancel"), ("y", "confirm", "Convert")]
+
+    DEFAULT_CSS = """
+    ConvertToRepoScreen {
+        align: center middle;
+    }
+    #convert-repo-dialog {
+        width: 76;
+        height: auto;
+        border: round $warning;
+        background: $surface;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, eff_target: str, config: str, spec: RepoSpec, file_count: int):
+        super().__init__()
+        self._eff_target = eff_target
+        self._config = config
+        self._spec = spec
+        self._file_count = file_count
+
+    def compose(self) -> ComposeResult:
+        with Container(id="convert-repo-dialog"):
+            yield Label(Text.assemble(
+                ("Convert ", "bold"), (f"~/{self._eff_target}", "cyan"),
+                (f" in '{self._config}' to a repo entry", "bold"),
+            ))
+            yield Label(Text(""))
+            yield Label(Text(f"  origin  {self._spec.url}", style="dim"))
+            yield Label(Text(f"  branch  {self._spec.branch or '(remote HEAD)'}", style="dim"))
+            yield Label(Text(""))
+            yield Label(Text(
+                f"{self._file_count} stored file(s) will be removed from ToolTamer.",
+                style="bold yellow",
+            ))
+            yield Label(Text(
+                "Your system copy is not touched. ToolTamer will sync it with "
+                "clone/pull from now on.", style="dim",
+            ))
+            yield Label(Text(""))
+            yield Label(Text("y=convert  Esc=cancel", style="dim"))
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class RepoTrackChoiceScreen(ModalScreen[str | None]):
+    """Asked when the path being added is a git repository root: track the
+    clone spec, or copy the contents like any other directory."""
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("r", "pick_repo", "Track as repo"),
+        ("c", "pick_copy", "Copy contents"),
+    ]
+
+    DEFAULT_CSS = """
+    RepoTrackChoiceScreen {
+        align: center middle;
+    }
+    #repo-choice-dialog {
+        width: 76;
+        height: auto;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, source: Path, spec: RepoSpec):
+        super().__init__()
+        self._source = source
+        self._spec = spec
+
+    def compose(self) -> ComposeResult:
+        rel = str(self._source.relative_to(Path.home()))
+        with Container(id="repo-choice-dialog"):
+            yield Label(Text.assemble(
+                ("~/", "cyan"), (rel, "bold cyan"), (" is a git repository", ""),
+            ))
+            yield Label(Text(""))
+            yield Label(Text(f"  origin  {self._spec.url}", style="dim"))
+            yield Label(Text(f"  branch  {self._spec.branch or '(remote HEAD)'}", style="dim"))
+            yield Label(Text(""))
+            yield OptionList(
+                Option("Track as repo — store url/branch, sync with clone/pull", id="repo"),
+                Option("Copy contents — mirror every file into ToolTamer", id="copy"),
+            )
+            yield Label(Text(""))
+            yield Label(Text("r=repo  c=copy  Esc=cancel", style="dim"))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(str(event.option.id))
+
+    def action_pick_repo(self) -> None:
+        self.dismiss("repo")
+
+    def action_pick_copy(self) -> None:
+        self.dismiss("copy")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class AddConfigPickScreen(ModalScreen[str | None]):
     """Pick which config to add a previously-chosen file/directory to."""
 
@@ -826,11 +1337,16 @@ class AddConfigPickScreen(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, tt_config: TTConfig, system: SystemInfo, source: Path):
+    def __init__(
+        self, tt_config: TTConfig, system: SystemInfo, source: Path,
+        as_repo: bool = False, repo_spec: RepoSpec | None = None,
+    ):
         super().__init__()
         self._tt_config = tt_config
         self._system = system
         self._source = source
+        self._as_repo = as_repo
+        self._repo_spec = repo_spec
 
     def compose(self) -> ComposeResult:
         rel = str(self._source.relative_to(Path.home()))
@@ -857,11 +1373,21 @@ class AddConfigPickScreen(ModalScreen[str | None]):
             yield Label(Text(""))
             yield Label(Text("Esc=cancel", style="dim"))
 
+    def _add_to(self, dest: str) -> list[str]:
+        """Perform the add for the target config `dest`. Split out from the
+        event handler so it is testable without a running app."""
+        return self._tt_config.add_path(
+            dest, self._source, self._system.hostname,
+            as_repo=self._as_repo, repo_spec=self._repo_spec,
+        )
+
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         dest = str(event.option.id)
-        report = self._tt_config.add_path(dest, self._source, self._system.hostname)
+        report = self._add_to(dest)
         for line in report[:8]:
             severity = "warning" if line.startswith("WARNING") else "information"
+            if line.startswith("ERROR"):
+                severity = "error"
             self.app.notify(line, severity=severity, timeout=8)
         if len(report) > 8:
             self.app.notify(f"... and {len(report) - 8} more changes", timeout=8)
@@ -1139,7 +1665,35 @@ class AddFileScreen(Screen):
             return
 
         dest = str(event.option.id)
-        report = self._tt_config.add_path(dest, sys_path, self._system.hostname)
+        spec = repo_mod.detect(sys_path)
+        if spec is None:
+            self._finish_add(dest)
+            return
+
+        def _after(choice: str | None) -> None:
+            if choice is None:
+                return
+            self._finish_add(
+                dest, as_repo=(choice == "repo"),
+                repo_spec=spec if choice == "repo" else None,
+            )
+
+        self.app.push_screen(RepoTrackChoiceScreen(sys_path, spec), callback=_after)
+
+    def _add_selected(
+        self, dest: str, as_repo: bool = False, repo_spec: RepoSpec | None = None,
+    ) -> list[str]:
+        """Add the currently selected path to `dest`. Split out from
+        `_finish_add` so it is testable without a running app."""
+        return self._tt_config.add_path(
+            dest, self._selected_path, self._system.hostname,
+            as_repo=as_repo, repo_spec=repo_spec,
+        )
+
+    def _finish_add(
+        self, dest: str, as_repo: bool = False, repo_spec: RepoSpec | None = None,
+    ) -> None:
+        report = self._add_selected(dest, as_repo=as_repo, repo_spec=repo_spec)
         for line in report[:8]:
             severity = "warning" if line.startswith("WARNING") else "information"
             self.app.notify(line, severity=severity, timeout=8)

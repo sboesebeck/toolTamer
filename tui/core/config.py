@@ -6,6 +6,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from tui.core.repo import RepoSpec, detect, read_marker, write_marker
+
 
 def _resolve_effective_target(stored: str, target: str) -> str:
     """Mirror include.sh's target resolution: when target ends with '/', the
@@ -34,6 +36,38 @@ def iter_tree_files(root: Path):
             if p.is_symlink():
                 dirnames.remove(name)
                 yield p.relative_to(root).as_posix(), p
+
+
+def dir_fully_readable(root: Path) -> bool:
+    """True when every file under `root` can be enumerated.
+
+    The Python counterpart of dirFullyReadable() in bin/include.sh, and it
+    exists for the same reason: a mirror that cannot see part of its source
+    treats the unseen files as "extra" on the destination and deletes them.
+    Refusing outright is the only safe answer.
+
+    It lives here, next to iter_tree_files, precisely because that function
+    is the blind spot it covers: os.walk() reports scandir failures to its
+    `onerror` hook and otherwise pretends the unreadable directory is empty,
+    so every iter_tree_files-based check (tree_hash, dir_diff, _dir_deletions)
+    silently under-reports. This is the one place that passes `onerror`.
+    config.py has no Textual dependency, so screens, the sync paths and tests
+    can all reach it.
+    """
+    if not root.is_dir():
+        return False
+    if not os.access(root, os.R_OK | os.X_OK):
+        return False
+    failed = False
+
+    def _onerror(_exc: OSError) -> None:
+        nonlocal failed
+        failed = True
+
+    for _dirpath, _dirnames, _filenames in os.walk(root, onerror=_onerror, followlinks=False):
+        if failed:
+            return False
+    return not failed
 
 
 def _entry_fingerprint(path: Path) -> str:
@@ -97,6 +131,15 @@ class FileMapping:
     @property
     def effective_target(self) -> str:
         return _resolve_effective_target(self.stored, self.target)
+
+    @property
+    def repo(self) -> RepoSpec | None:
+        """The clone spec when this entry is a git-repo entry, else None."""
+        return read_marker(self.repo_path)
+
+    @property
+    def is_repo(self) -> bool:
+        return self.repo is not None
 
 
 class TTConfig:
@@ -287,21 +330,63 @@ class TTConfig:
         self.remove_file_mapping(config, stored, target)
         return self._delete_stored_if_unreferenced(config, stored)
 
-    def find_covering_dir(self, rel: str, configs) -> FileMapping | None:
-        """Find a tracked directory entry whose effective target contains
-        `rel`. Searches the given config names; the deepest (longest) match
-        wins. Returns None when no tracked directory covers the path."""
+    @staticmethod
+    def _store_kind(store: Path) -> str:
+        """'repo' | 'dir' | 'unreadable' for a store directory.
+
+        read_marker stats <store>/.ttgit, which needs search permission on
+        `store` itself and raises PermissionError when it is missing (pathlib
+        only swallows ENOENT/ENOTDIR/EBADF/ELOOP, not EACCES). An unreadable
+        store gets its own answer rather than being guessed at: calling it a
+        plain snapshot is the I3 bug again, and calling it a repo entry would
+        be an equally unfounded claim."""
+        try:
+            return "repo" if read_marker(store) is not None else "dir"
+        except OSError:
+            return "unreadable"
+
+    def _find_covering(self, rel: str, configs, kind: str) -> FileMapping | None:
+        """Deepest tracked directory entry whose effective target contains
+        `rel` and whose store side is of `kind`. None when nothing matches.
+
+        The `_path_within` test comes first, before any I/O on the store: an
+        unrelated tracked directory that the caller is not adding into must
+        never be able to affect — or break — the answer."""
         best: FileMapping | None = None
         for cfg in configs:
             for stored, target in self.get_file_mappings(cfg):
+                eff = _resolve_effective_target(stored, target)
+                if not _path_within(rel, eff):
+                    continue
                 repo = self.configs_dir / cfg / "files" / stored
                 if not repo.is_dir() or repo.is_symlink():
                     continue
-                eff = _resolve_effective_target(stored, target)
-                if _path_within(rel, eff):
-                    if best is None or len(eff) > len(best.effective_target):
-                        best = FileMapping(stored, target, cfg, repo)
+                if self._store_kind(repo) != kind:
+                    continue
+                if best is None or len(eff) > len(best.effective_target):
+                    best = FileMapping(stored, target, cfg, repo)
         return best
+
+    def find_covering_dir(self, rel: str, configs) -> FileMapping | None:
+        """Find a tracked *directory snapshot* whose effective target contains
+        `rel`. Searches the given config names; the deepest (longest) match
+        wins. Returns None when no tracked directory covers the path.
+
+        Repo entries are deliberately excluded: their store side is a marker
+        directory, not a snapshot, so writing a file into it would produce a
+        copy neither engine ever syncs. Use find_covering_repo for those."""
+        return self._find_covering(rel, configs, kind="dir")
+
+    def find_covering_repo(self, rel: str, configs) -> FileMapping | None:
+        """Find a tracked *repo entry* whose effective target contains `rel`.
+        ToolTamer tracks such a repository as a whole; individual files inside
+        it are not separately trackable."""
+        return self._find_covering(rel, configs, kind="repo")
+
+    def find_covering_unreadable(self, rel: str, configs) -> FileMapping | None:
+        """Find a tracked directory covering `rel` whose stored copy cannot be
+        read, so neither of the two finders above can answer for it."""
+        return self._find_covering(rel, configs, kind="unreadable")
 
     def add_path(
         self,
@@ -309,6 +394,8 @@ class TTConfig:
         source: Path,
         chain_config: str | None = None,
         home: Path | None = None,
+        as_repo: bool = False,
+        repo_spec: RepoSpec | None = None,
     ) -> list[str]:
         """Add a file or directory under $HOME to a config.
 
@@ -316,11 +403,37 @@ class TTConfig:
           entry; instead the copy inside that directory snapshot is updated.
         - Adding a directory snapshots the whole tree and absorbs entries of
           the destination config whose target lies inside the directory.
+        - `as_repo=True` adds a git-repo entry instead: only a `.ttgit`
+          marker is written to the store (no `copytree`), and sub-entries
+          are left where they are — a repo does not contain separately
+          tracked files, so they only get a warning, not an absorption.
         Returns a human-readable report of what happened."""
         home = home or Path.home()
         rel = source.relative_to(home).as_posix()
         report: list[str] = []
         scope = list(dict.fromkeys(self.resolve_chain(chain_config or dest_config) + [dest_config]))
+
+        if as_repo:
+            spec = repo_spec or detect(source)
+            if spec is None:
+                return [f"ERROR: ~/{rel} is not a git repository root"]
+            store = self.configs_dir / dest_config / "files" / rel
+            if store.is_dir() and not store.is_symlink():
+                shutil.rmtree(store)
+            elif store.exists() or store.is_symlink():
+                store.unlink()
+            write_marker(store, spec)
+            self.add_file_mapping(dest_config, rel, rel)
+            report.append(
+                f"Added repo ~/{rel} to '{dest_config}' ({spec.url}"
+                + (f", branch {spec.branch}" if spec.branch else "")
+                + ")"
+            )
+            report += self._warn_overlapping_mappings(
+                scope, dest_config, rel,
+                f"it lies inside repo ~/{rel} and is no longer managed by ToolTamer's copy path",
+            )
+            return report
 
         if source.is_dir() and not source.is_symlink():
             dest_target = self.configs_dir / dest_config / "files" / rel
@@ -333,19 +446,33 @@ class TTConfig:
             self.add_file_mapping(dest_config, rel, rel)
             report.append(f"Added directory ~/{rel} to '{dest_config}'")
             report += self._absorb_into_dir(dest_config, rel, rel)
-            for cfg in scope:
-                if cfg == dest_config:
-                    continue
-                for stored, target in self.get_file_mappings(cfg):
-                    eff = _resolve_effective_target(stored, target)
-                    if _path_within(eff, rel):
-                        report.append(
-                            f"WARNING: ~/{eff} is also mapped in '{cfg}' — it now conflicts "
-                            f"with directory ~/{rel}; consider removing it there"
-                        )
+            report += self._warn_overlapping_mappings(
+                scope, dest_config, rel,
+                f"it now conflicts with directory ~/{rel}; consider removing it there",
+            )
             return report
 
         # Regular file
+        covering_blind = self.find_covering_unreadable(rel, scope)
+        if covering_blind is not None:
+            return [
+                f"~/{rel} lies inside tracked directory "
+                f"~/{covering_blind.effective_target} ('{covering_blind.config}'), "
+                f"whose stored copy cannot be read — refusing rather than "
+                f"guessing whether it is a repo entry; nothing added"
+            ]
+
+        covering_repo = self.find_covering_repo(rel, scope)
+        if covering_repo is not None:
+            # I3: a repo entry's store side holds only .ttgit. Writing the
+            # file into it produced a copy that neither engine ever syncs,
+            # while telling the user the directory snapshot had been updated.
+            return [
+                f"~/{rel} lies inside repo entry ~/{covering_repo.effective_target} "
+                f"('{covering_repo.config}') — ToolTamer tracks the repository, "
+                f"not individual files inside it; nothing added"
+            ]
+
         covering = self.find_covering_dir(rel, scope)
         if covering is not None:
             inner = rel[len(covering.effective_target.rstrip("/")) + 1:]
@@ -372,6 +499,46 @@ class TTConfig:
         self.add_file_mapping(dest_config, rel, rel)
         report.append(f"{'Updated' if existed else 'Added'} ~/{rel} in '{dest_config}'")
         return report
+
+    def _warn_overlapping_mappings(
+        self, scope: list[str], dest_config: str, rel: str, message: str
+    ) -> list[str]:
+        """Warn about mappings in other configs of `scope` whose effective
+        target lies inside `rel`, the path just added to `dest_config`.
+
+        Shared by the directory and repo branches of `add_path`: both need
+        to flag pre-existing entries that now overlap with what was just
+        added, differing only in the wording of `message` (the tail after
+        "is also mapped in '<cfg>' — ")."""
+        report: list[str] = []
+        for cfg in scope:
+            if cfg == dest_config:
+                continue
+            for stored, target in self.get_file_mappings(cfg):
+                eff = _resolve_effective_target(stored, target)
+                if _path_within(eff, rel):
+                    report.append(f"WARNING: ~/{eff} is also mapped in '{cfg}' — {message}")
+        return report
+
+    def convert_to_repo(self, config: str, stored: str, spec: RepoSpec) -> list[str]:
+        """Turn an existing tracked directory into a git-repo entry.
+
+        The stored copy is deleted and replaced by a .ttgit marker; the
+        files.conf entry stays exactly as it is."""
+        store = self.configs_dir / config / "files" / stored
+        removed = 0
+        if store.is_dir() and not store.is_symlink():
+            removed = sum(1 for _ in iter_tree_files(store))
+            shutil.rmtree(store)
+        elif store.exists() or store.is_symlink():
+            removed = 1
+            store.unlink()
+        write_marker(store, spec)
+        return [
+            f"Converted '{config}':{stored} to a repo entry ({spec.url}"
+            + (f", branch {spec.branch}" if spec.branch else "")
+            + f"); removed {removed} stored file(s)"
+        ]
 
     def _absorb_into_dir(self, config: str, dir_stored: str, dir_eff: str) -> list[str]:
         """Remove entries of `config` whose effective target lies inside the
