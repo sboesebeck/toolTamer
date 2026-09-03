@@ -557,12 +557,33 @@ class FileScreen(Screen):
         self._do_apply(config, stored, target)
 
     def _do_apply(self, config: str, stored: str, target: str) -> None:
+        import os
         import shutil
         from tui.core.config import _resolve_effective_target
         from tui.core.repo import read_marker, sync_to_system
         repo_file = self._tt_config.configs_dir / config / "files" / stored
         sys_file = Path.home() / _resolve_effective_target(stored, target)
         if not repo_file.exists():
+            return
+        if repo_file.is_dir() and not os.access(repo_file, os.R_OK | os.X_OK):
+            # R28: an unreadable store directory tells us nothing about what
+            # it holds. It may in fact be a repo entry whose .ttgit we simply
+            # cannot see — read_marker below stats a path *inside* repo_file,
+            # which needs search permission on repo_file itself, so on this
+            # Python/OS it raises PermissionError rather than politely
+            # reporting "no marker" (verified directly, not assumed — see
+            # the task report). Checked here, before read_marker is even
+            # called: sys_file is a normal, fully readable path, so
+            # shutil.rmtree(sys_file) below would succeed outright — deleting
+            # a possibly-real repository — before shutil.copytree(repo_file,
+            # ...) got anywhere near failing on the unreadable source. The
+            # guard belongs at this destructive step, not at the detector:
+            # no read_marker predicate can distinguish "empty directory" from
+            # "repo entry" when it cannot see inside repo_file at all.
+            self.notify(
+                f"Cannot read {repo_file} — store entry unreadable, skipped",
+                severity="error", timeout=8,
+            )
             return
         spec = read_marker(repo_file)
         if spec is not None:

@@ -286,6 +286,54 @@ def test_do_apply_never_deletes_a_repo_target(tmp_config: Path, tmp_path: Path, 
     assert (target / ".git").exists()
 
 
+def test_do_apply_refuses_when_store_dir_is_unreadable(tmp_config: Path, tmp_path: Path, monkeypatch):
+    """R28: an unreadable store directory must never let _do_apply's plain-
+    directory branch through.
+
+    Path.exists()/is_file() both swallow PermissionError, so read_marker
+    reports "no marker" for an unreadable store dir exactly as it would for
+    a plain directory — but the directory might in fact be a repo entry
+    whose .ttgit we simply cannot see. sys_file, unlike the store dir, is
+    perfectly readable, so shutil.rmtree(sys_file) would succeed outright —
+    deleting a possibly-real repository — before shutil.copytree(repo_file,
+    ...) ever got a chance to fail trying to read the source. The guard
+    belongs at this destructive step, not at the (unfixable) detector."""
+    import os
+
+    home = tmp_path / "home"
+    target = home / ".config" / "nvim"
+    target.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", "--initial-branch=main"],
+                   cwd=target, check=True, capture_output=True)
+    (target / "work_in_progress.lua").write_text("-- precious\n")
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    (store / "init.lua").write_text("-- stored copy\n")
+    os.chmod(store, 0o000)
+
+    try:
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+        screen = FileScreen.__new__(FileScreen)
+        screen._tt_config = TTConfig(tmp_config)
+        screen._tree_cache = {}
+        screen._refresh_files = lambda: None
+        screen._show_diff = lambda *a, **k: None
+        notifications: list[str] = []
+        screen.notify = lambda msg, *a, **k: notifications.append(msg)
+
+        screen._do_apply("testhost", "nvim", ".config/nvim")
+
+        assert (target / "work_in_progress.lua").read_text() == "-- precious\n"
+        assert (target / ".git").exists()
+        assert any("unreadable" in m for m in notifications), notifications
+    finally:
+        os.chmod(store, 0o755)
+
+
 from tui.core.repo import read_marker
 
 
