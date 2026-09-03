@@ -96,9 +96,17 @@ def _git(args: list[str], cwd: Path | None = None) -> tuple[int, str]:
     return proc.returncode, proc.stdout.strip()
 
 
-def detect(system_path: Path) -> RepoSpec | None:
-    """Return a RepoSpec when `system_path` is the root of a git repo with
-    an `origin` remote, else None.
+def repo_root(system_path: Path) -> Path | None:
+    """Return the resolved path when `system_path` is the ROOT of a git
+    repository, else None. Says nothing about remotes.
+
+    The counterpart of ttGitTopLevel in bin/include.sh, and split out of
+    detect() for the same reason bash keeps them apart: "is this a repo
+    root" and "does it have the origin the marker names" are two questions
+    with two very different answers. Folding them together made a live
+    repository whose remote had merely been renamed look like "not a git
+    repository", which is the one classification that authorises moving the
+    tree aside and cloning over it.
 
     Only the root counts: a subdirectory of a repo is not itself trackable
     as a repo entry."""
@@ -108,17 +116,45 @@ def detect(system_path: Path) -> RepoSpec | None:
     if rc != 0 or not top:
         return None
     try:
-        if Path(top).resolve() != system_path.resolve():
+        resolved = system_path.resolve()
+        if Path(top).resolve() != resolved:
             return None
     except OSError:
         return None
+    return resolved
+
+
+def origin_url(system_path: Path) -> str | None:
+    """The `origin` remote URL of the repo at `system_path`, or None when
+    there is no origin (or no repo)."""
     rc, url = _git(["remote", "get-url", "origin"], cwd=system_path)
     if rc != 0 or not url:
         return None
+    return url
+
+
+def current_branch(system_path: Path) -> str | None:
+    """The checked-out branch name, or None on a detached HEAD / no repo."""
     rc, branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=system_path)
     if rc != 0 or not branch or branch == "HEAD":
-        branch = ""
-    return RepoSpec(url=url, branch=branch or None)
+        return None
+    return branch
+
+
+def detect(system_path: Path) -> RepoSpec | None:
+    """Return a RepoSpec when `system_path` is the root of a git repo with
+    an `origin` remote, else None.
+
+    Contract deliberately unchanged: this is the "a repo root with an origin
+    I can record" question, which is what the add flow and the convert-to-repo
+    migration need. Callers that only want to know whether a path is a repo
+    root — status(), sync_to_system() — use repo_root() instead."""
+    if repo_root(system_path) is None:
+        return None
+    url = origin_url(system_path)
+    if url is None:
+        return None
+    return RepoSpec(url=url, branch=current_branch(system_path))
 
 
 RepoStatus = str  # one of the nine literals documented in the plan/spec
@@ -188,10 +224,13 @@ def status(system_path: Path, spec: RepoSpec, fetch: bool = False) -> RepoStatus
         return "invalid_spec"
     if not system_path.exists():
         return "missing"
-    found = detect(system_path)
-    if found is None:
+    if repo_root(system_path) is None:
         return "not_a_repo"
-    if found.url != spec.url:
+    # I1: a repo root without an origin is still a repository — just not the
+    # one the marker names. That is what `wrong_origin` already means, so it
+    # gets no tenth status of its own; what it must NOT be is `not_a_repo`,
+    # the value that authorises sync_to_system to move the tree aside.
+    if origin_url(system_path) != spec.url:
         return "wrong_origin"
     if fetch:
         _git(["fetch", "--quiet", "origin"], cwd=system_path)
@@ -246,7 +285,7 @@ def sync_to_system(system_path: Path, spec: RepoSpec) -> SyncResult:
             return SyncResult("cloned", f"Cloned {spec.url} into {system_path}")
         return SyncResult("failed", f"Clone of {spec.url} failed")
 
-    if detect(system_path) is None:
+    if repo_root(system_path) is None:
         # .ttbak is a single-slot scratch backup, same convention as
         # syncDirToSystem/syncFile in bin/include.sh and bin/tt: a stale
         # one is replaced rather than kept around forever. The live tree
@@ -258,6 +297,14 @@ def sync_to_system(system_path: Path, spec: RepoSpec) -> SyncResult:
         if clone(system_path, spec):
             return SyncResult("cloned", f"Replaced non-repo {system_path} (backup: {backup})")
         return SyncResult("failed", f"Clone of {spec.url} failed (backup: {backup})")
+
+    # I1/bash parity: the origin comparison happens here, before the fetch,
+    # exactly where syncRepoToSystem does it. A repo whose origin does not
+    # match the marker is skipped as "origin mismatch" rather than being
+    # reported as unreachable by the fetch below (which, with no origin at
+    # all, cannot possibly succeed).
+    if origin_url(system_path) != spec.url:
+        return SyncResult("skipped", f"{system_path}: origin differs from .ttgit ({spec.url})")
 
     # R30: status()'s own fetch=True discards git fetch's exit code, so an
     # unreachable remote (no network, origin gone) fell through to whatever

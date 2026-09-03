@@ -629,22 +629,32 @@ class FileScreen(Screen):
 
         Never captures content and never removes the marker."""
         from tui.core.config import _resolve_effective_target
-        from tui.core.repo import detect, read_marker, write_marker
+        from tui.core.repo import current_branch, origin_url, read_marker, repo_root, write_marker
 
         store = self._tt_config.configs_dir / config / "files" / stored
-        sys_path = Path.home() / _resolve_effective_target(stored, target)
+        eff = _resolve_effective_target(stored, target)
+        sys_path = Path.home() / eff
         current = read_marker(store)
         if current is None:
             return "Not a repo entry."
-        found = detect(sys_path)
-        if found is None:
-            return f"~/{_resolve_effective_target(stored, target)} is not a git repository root — marker unchanged."
-        if found.url == current.url and found.branch == current.branch:
+        # I1: "not a repo root" and "no origin remote" are separate answers,
+        # as they are in captureRepoFromSystem. Collapsing them told the user
+        # a live repository was not a repository, which they cannot act on.
+        if repo_root(sys_path) is None:
+            return f"~/{eff} is not a git repository root — marker unchanged."
+        found_url = origin_url(sys_path)
+        if found_url is None:
+            return (
+                f"~/{eff} has no 'origin' remote — marker unchanged. "
+                f"ToolTamer records origin; add one or rename the remote back."
+            )
+        found_branch = current_branch(sys_path)
+        if found_url == current.url and found_branch == current.branch:
             return "Marker already matches the system — nothing to save."
-        write_marker(store, RepoSpec(url=found.url, branch=found.branch, force=current.force))
+        write_marker(store, RepoSpec(url=found_url, branch=found_branch, force=current.force))
         return (
-            f"Updated .ttgit: url {found.url}"
-            + (f", branch {found.branch}" if found.branch else "")
+            f"Updated .ttgit: url {found_url}"
+            + (f", branch {found_branch}" if found_branch else "")
         )
 
     def action_save_change(self) -> None:
@@ -984,6 +994,31 @@ class FileScreen(Screen):
         sys_path = Path.home() / _resolve_effective_target(stored, target)
         return repo_mod.detect(sys_path)
 
+    def _convert_blocked_reason(self, config: str, stored: str, target: str) -> str:
+        """Why `g` cannot convert this entry — one sentence the user can act on.
+
+        I1 knock-on: this used to be a single catch-all ("Only tracked
+        directories whose system path is a git repo root can be converted"),
+        which is plainly false for a directory that IS a repo root and merely
+        lacks an origin remote."""
+        from tui.core.config import _resolve_effective_target
+
+        store = self._tt_config.configs_dir / config / "files" / stored
+        eff = _resolve_effective_target(stored, target)
+        if repo_mod.read_marker(store) is not None:
+            return f"~/{eff} is already tracked as a git repo entry."
+        if not store.is_dir():
+            return f"~/{eff} is not a tracked directory — only directories can be converted."
+        sys_path = Path.home() / eff
+        if repo_mod.repo_root(sys_path) is None:
+            return f"~/{eff} is not a git repository root — nothing to convert it to."
+        if repo_mod.origin_url(sys_path) is None:
+            return (
+                f"~/{eff} is a git repository but has no 'origin' remote — "
+                f"ToolTamer needs one to record in .ttgit."
+            )
+        return f"~/{eff} cannot be converted."
+
     def action_convert_to_repo(self) -> None:
         sel = self._get_selected()
         if not sel:
@@ -992,8 +1027,7 @@ class FileScreen(Screen):
         spec = self._convertible(config, stored, target)
         if spec is None:
             self.notify(
-                "Only tracked directories whose system path is a git repo root "
-                "can be converted.",
+                self._convert_blocked_reason(config, stored, target),
                 severity="warning", timeout=6,
             )
             return

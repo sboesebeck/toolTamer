@@ -355,3 +355,66 @@ def test_sync_skips_on_origin_mismatch(clone: Path):
 
 def test_sync_fails_on_invalid_spec(clone: Path):
     assert sync_to_system(clone, RepoSpec(url="")).action == "failed"
+
+
+# --- I1: "is a repo root" and "has an origin remote" are two questions -----
+
+
+@pytest.fixture
+def clone_without_origin(clone: Path) -> Path:
+    """A live repository whose remote was renamed origin -> upstream.
+
+    Still a repo root, still full of the user's work — it simply is not the
+    repo the marker names any more."""
+    _run(clone, "git", "remote", "rename", "origin", "upstream")
+    (clone / "work_in_progress.txt").write_text("precious\n")
+    return clone
+
+
+def test_repo_root_is_independent_of_the_origin_remote(clone_without_origin: Path):
+    """bash splits these: ttGitTopLevel checks only the root, and the origin
+    comparison is a separate, non-destructive row."""
+    from tui.core.repo import repo_root
+
+    assert repo_root(clone_without_origin) == clone_without_origin.resolve()
+    assert repo_root(clone_without_origin / "nope") is None
+
+
+def test_origin_url_is_none_without_an_origin_remote(clone_without_origin: Path, clone: Path):
+    from tui.core.repo import origin_url
+
+    assert origin_url(clone_without_origin) is None
+
+
+def test_detect_still_requires_both_root_and_origin(clone_without_origin: Path):
+    """detect()'s contract is unchanged: it answers "a repo root with an
+    origin I can record", which is what the add flow and the migration need."""
+    from tui.core.repo import detect
+
+    assert detect(clone_without_origin) is None
+
+
+def test_status_says_wrong_origin_not_not_a_repo_when_origin_is_gone(clone_without_origin: Path):
+    """I1: status() conflated the two questions, so a live repository whose
+    remote had been renamed was reported as `not_a_repo` — and
+    sync_to_system's "not a git repository" branch then renamed it to
+    .ttbak and cloned over it."""
+    from tui.core.repo import status
+
+    assert status(clone_without_origin, RepoSpec(url="whatever")) == "wrong_origin"
+
+
+def test_sync_to_system_never_moves_aside_a_repo_that_lost_its_origin(
+    clone_without_origin: Path, origin_repo: Path
+):
+    """The destructive half of I1, reproduced: bash reports "Skipped repo
+    (origin mismatch)" and leaves the tree in place; Python renamed it to
+    .ttbak and cloned over it, moving the user's files out from under them."""
+    from tui.core.repo import sync_to_system
+
+    result = sync_to_system(clone_without_origin, RepoSpec(url=str(origin_repo)))
+
+    assert result.action == "skipped"
+    assert "origin" in result.message
+    assert (clone_without_origin / "work_in_progress.txt").read_text() == "precious\n"
+    assert not clone_without_origin.with_name(clone_without_origin.name + ".ttbak").exists()

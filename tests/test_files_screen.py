@@ -817,3 +817,106 @@ def test_do_override_from_repo_refuses_when_source_store_is_unreadable(
         assert any("read" in m for m in notifications), notifications
     finally:
         os.chmod(src / "sub", 0o755)
+
+
+# --- I1 knock-ons: messages the user can act on ---------------------------
+
+
+def _repo_without_origin(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "--quiet", "--initial-branch=main"],
+                   cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "upstream", "git@example.com:me/nvim.git"],
+                   cwd=path, check=True, capture_output=True)
+
+
+def test_save_repo_marker_says_the_origin_is_missing_not_that_it_is_no_repo(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    """I1 knock-on: a repo whose remote was renamed origin -> upstream is a
+    perfectly good repository. Telling the user it "is not a git repository
+    root" is something they cannot act on."""
+    home = tmp_path / "home"
+    _repo_without_origin(home / ".config" / "nvim")
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    old_origin = str(tmp_path / "old.git")
+    (store / ".ttgit").write_text(f"url = {old_origin}\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+    message = screen._save_repo_marker("testhost", "nvim", ".config/nvim")
+
+    assert read_marker(store).url == old_origin
+    assert "origin" in message
+    assert "not a git repository" not in message
+
+
+def test_convert_blocked_reason_names_the_missing_origin(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    """Same knock-on for `g`: _convertible returns None for a repo root
+    without an origin, and the notification said "Only tracked directories
+    whose system path is a git repo root can be converted" — which is false
+    and unactionable for a directory that IS a git repo root."""
+    home = tmp_path / "home"
+    _repo_without_origin(home / ".config" / "nvim")
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    (host / "files" / "nvim").mkdir(parents=True)
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+
+    assert screen._convertible("testhost", "nvim", ".config/nvim") is None
+    reason = screen._convert_blocked_reason("testhost", "nvim", ".config/nvim")
+    assert "origin" in reason
+
+
+def test_convert_blocked_reason_for_a_plain_directory(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    (home / ".config" / "kitty").mkdir(parents=True)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("kitty;.config/kitty\n")
+    (host / "files" / "kitty").mkdir(parents=True)
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+
+    reason = screen._convert_blocked_reason("testhost", "kitty", ".config/kitty")
+    assert "git repository root" in reason
+
+
+def test_convert_blocked_reason_for_an_existing_repo_entry(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    target = home / ".config" / "nvim"
+    target.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", "--initial-branch=main"],
+                   cwd=target, check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", "git@example.com:me/nvim.git"],
+                   cwd=target, check=True, capture_output=True)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    (store / ".ttgit").write_text("url = git@example.com:me/nvim.git\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+
+    reason = screen._convert_blocked_reason("testhost", "nvim", ".config/nvim")
+    assert "already" in reason.lower()
