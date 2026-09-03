@@ -542,6 +542,24 @@ class FileScreen(Screen):
         sys_file = Path.home() / eff_target
         if not repo_file.exists():
             return
+        if repo_file.is_dir() and (
+            not dir_fully_readable(repo_file)
+            or repo_mod.read_marker(repo_file) is not None
+        ):
+            # I2: the deletion preview below compares the store tree with the
+            # system tree, and for a repo entry the store holds exactly one
+            # file (.ttgit) while the system holds the whole clone — so every
+            # file in the repository, .git included, was listed as "would be
+            # deleted" under a "delete and apply" caption. _do_apply then
+            # routed to clone/pull and deleted nothing, which is precisely
+            # what makes it corrosive: a dialog that always cries wolf.
+            # Checked here, above the preview, exactly as action_save_change
+            # already does. An unreadable store dir is routed the same way
+            # because read_marker cannot be trusted to answer for it and
+            # _do_apply refuses outright — either way there is nothing to
+            # delete on the system side.
+            self._do_apply(config, stored, target)
+            return
         if repo_file.is_dir() and sys_file.is_dir():
             deletions = _dir_deletions(repo_file, sys_file)
             if deletions:

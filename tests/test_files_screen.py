@@ -920,3 +920,38 @@ def test_convert_blocked_reason_for_an_existing_repo_entry(
 
     reason = screen._convert_blocked_reason("testhost", "nvim", ".config/nvim")
     assert "already" in reason.lower()
+
+
+# --- I2: `a` on a healthy repo entry must not offer to delete the repo ----
+
+
+@pytest.mark.asyncio
+async def test_apply_on_a_repo_entry_never_shows_the_deletion_dialog(tmp_path: Path):
+    """I2: action_apply_to_system computed _dir_deletions before any repo
+    check. A repo entry's store holds one file (.ttgit) and the system holds
+    the whole clone, so every file in the repository — all of .git included —
+    was listed as "would be deleted" under a "delete and apply" caption.
+    _do_apply's guard then routed to sync_to_system and deleted nothing, so
+    it was harmless — and that is the problem: it trains the user to click
+    through the one dialog that exists to stop them."""
+    from tui.screens.files import ConfirmDeletionsScreen, _dir_deletions
+
+    base, fake_home = _build_repo_entry_config(tmp_path)
+    store = base / "configs" / "common" / "files" / "myrepo"
+    # The bogus deletion list this used to raise a dialog about:
+    assert len(_dir_deletions(store, fake_home / ".myrepo")) > 1
+
+    with patch("socket.gethostname", return_value="testhost"), \
+         patch.object(Path, "home", return_value=fake_home):
+        app = _RepoFileScreenHarness(TTConfig(base), SystemInfo())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            applied: list[tuple] = []
+            screen._do_apply = lambda *a: applied.append(a)
+            screen.action_apply_to_system()
+            await pilot.pause()
+            pushed = [type(s).__name__ for s in app.screen_stack]
+
+    assert ConfirmDeletionsScreen.__name__ not in pushed, pushed
+    assert applied == [("common", "myrepo", ".myrepo")]
