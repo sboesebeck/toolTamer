@@ -28,9 +28,9 @@ clone`/`git pull` instead of mirroring its files — and its `.git`
 directory — into the ToolTamer store.
 
 1. Open `tt` (or `tt --admin`) → **File Manager**, then press `n` and pick
-   the repository's root directory. With `fzf`/`fd` installed you get a
-   fuzzy picker over everything under `~`; without them, a directory-tree
-   browser.
+   the repository's root directory. With `fzf` installed you get a fuzzy
+   picker over everything under `~` (faster when `fd` is also installed);
+   without `fzf`, a directory-tree browser.
 2. ToolTamer detects that the path is the root of a git repository (with
    an `origin` remote) and asks whether to **track as repo** or **copy
    contents**. Picking a plain file, or a directory that is not itself a
