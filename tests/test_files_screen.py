@@ -85,3 +85,22 @@ from tui.screens.files import FileScreen
 ])
 def test_repo_status_token_mapping(state: str, token: str):
     assert FileScreen._repo_status_token(state) == token
+
+
+from tui.core.repo import RepoSpec
+
+
+def test_repo_detail_lines_report_missing_clone(tmp_path: Path):
+    lines = FileScreen._repo_detail_lines(
+        RepoSpec(url="git@example.com:me/r.git", branch="main"), tmp_path / "nope"
+    )
+    text = "\n".join(t for t, _ in lines)
+    assert "git@example.com:me/r.git" in text
+    assert "main" in text
+    assert "not cloned yet" in text.lower()
+
+
+def test_repo_detail_lines_flag_invalid_spec(tmp_path: Path):
+    lines = FileScreen._repo_detail_lines(RepoSpec(url=""), tmp_path)
+    text = "\n".join(t for t, _ in lines)
+    assert "no url" in text

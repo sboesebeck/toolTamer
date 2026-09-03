@@ -195,6 +195,58 @@ class FileScreen(Screen):
     def _repo_status_token(state: str) -> str:
         return FileScreen._REPO_TOKENS.get(state, "??")
 
+    @staticmethod
+    def _repo_detail_lines(spec, sys_path: Path) -> list[tuple[str, str]]:
+        """Detail-pane content for a repo entry: the clone spec plus the
+        current local state. No file diff — the store holds no content."""
+        lines: list[tuple[str, str]] = [("", "")]
+        lines.append(("Tracked as git repository", "bold cyan"))
+        lines.append((f"  url    {spec.url or '(missing — .ttgit has no url)'}",
+                      "" if spec.url else "bold red"))
+        lines.append((f"  branch {spec.branch or '(remote HEAD)'}", ""))
+        if spec.force:
+            lines.append(("  force  true — local changes are discarded on sync", "yellow"))
+        lines.append(("", ""))
+
+        if not spec.url:
+            lines.append(("Entry is broken: .ttgit has no url. Sync skips it.", "bold red"))
+            return lines
+
+        state = repo_mod.status(sys_path, spec)
+        descriptions = {
+            "ok": ("Up to date with the remote.", "green"),
+            "ahead": ("Local commits not pushed — ToolTamer does not push.", "yellow"),
+            "behind": ("Behind the remote — 'a' fast-forwards.", "yellow"),
+            "dirty": ("Uncommitted changes — sync skips this repo.", "bold yellow"),
+            "diverged": ("Diverged from the remote — sync skips this repo.", "bold yellow"),
+            "missing": ("Not cloned yet — 'a' clones it.", "red"),
+            "not_a_repo": ("Path exists but is not a git repository root.", "bold red"),
+            "wrong_origin": ("origin differs from .ttgit — sync skips this repo.", "bold red"),
+            "invalid_spec": (".ttgit has no url.", "bold red"),
+        }
+        text, style = descriptions.get(state, (f"Unknown state: {state}", "red"))
+        lines.append((f"Status: {state} — {text}", style))
+
+        if state in ("missing", "invalid_spec"):
+            return lines
+
+        ahead, behind = repo_mod.ahead_behind(sys_path, spec.branch or "HEAD")
+        if ahead or behind:
+            lines.append((f"  {ahead} ahead / {behind} behind origin", "dim"))
+        rc, head = repo_mod._git(["rev-parse", "--short", "HEAD"], cwd=sys_path)
+        if rc == 0 and head:
+            lines.append((f"  HEAD {head}", "dim"))
+        rc, porcelain = repo_mod._git(["status", "--porcelain"], cwd=sys_path)
+        if rc == 0 and porcelain:
+            lines.append(("", ""))
+            lines.append(("Working tree:", "bold"))
+            for entry in porcelain.splitlines()[:20]:
+                lines.append((f"  {entry}", "dim"))
+            extra = len(porcelain.splitlines()) - 20
+            if extra > 0:
+                lines.append((f"  ... and {extra} more", "dim"))
+        return lines
+
     def _file_status(self, repo: Path, system: Path) -> str:
         if not repo.exists():
             return "missing_repo"
@@ -254,6 +306,13 @@ class FileScreen(Screen):
         self.app.call_from_thread(log.write, Text(f"~/{eff_target}", style="bold"))
         self.app.call_from_thread(log.write, Text(f"Config: {config}", style="cyan"))
         self.app.call_from_thread(log.write, Text(f"Stored as: {stored}", style="dim"))
+
+        from tui.core.repo import read_marker
+        spec = read_marker(repo_file)
+        if spec is not None:
+            for text, style in self._repo_detail_lines(spec, sys_file):
+                self.app.call_from_thread(log.write, Text(text, style=style))
+            return
 
         # Identify shadowing relationships for this target
         all_for_target = [
