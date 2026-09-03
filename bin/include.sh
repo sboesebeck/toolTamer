@@ -247,19 +247,25 @@ function captureDirFromSystem() {
 
 TTGIT_MARKER=".ttgit"
 
-# True when the store entry $1 is a repo marker instead of content.
+# True when the store entry $1 holds a repo marker instead of content.
+# Fails CLOSED: anything that exists at the marker path — a directory, an
+# unreadable file, a broken symlink — counts as a repo entry too, so it
+# can never fall through to mirrorDir. readRepoSpec's own [ -f ] check
+# then reports it as a broken marker (empty url) rather than mirroring.
 function isRepoEntry() {
-  [ -f "$1/$TTGIT_MARKER" ]
+  [ -e "$1/$TTGIT_MARKER" ] || [ -L "$1/$TTGIT_MARKER" ]
 }
 
 # readRepoSpec <storedir> <key> -- prints the value, empty when unset.
 # Values must not contain '#'; everything from the first '#' is a comment.
+# A repeated key takes its LAST occurrence, matching tui/core/repo.py's
+# read_marker (a dict keyed by name — later assignment wins).
 function readRepoSpec() {
   local marker="$1/$TTGIT_MARKER"
   [ -f "$marker" ] || return 1
   sed -e 's/#.*$//' "$marker" |
     grep -E "^[[:space:]]*$2[[:space:]]*=" |
-    head -1 |
+    tail -1 |
     cut -f2- -d= |
     sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
@@ -281,14 +287,25 @@ function ttGitTopLevel() {
 }
 
 # ttGitClone <url> <branch> <target>
+# On failure, leaves git's stderr in $TTGIT_CLONE_ERROR (and logs it via
+# logf) so callers can report the actual cause instead of a bare "failed".
 function ttGitClone() {
   local url="$1" branch="$2" target="$3"
   mkdir -p "$(dirname "$target")"
+  local out rc
   if [ -n "$branch" ]; then
-    git clone --quiet --branch "$branch" "$url" "$target" 2>/dev/null
+    out=$(git clone --quiet --branch "$branch" "$url" "$target" 2>&1)
   else
-    git clone --quiet "$url" "$target" 2>/dev/null
+    out=$(git clone --quiet "$url" "$target" 2>&1)
   fi
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    TTGIT_CLONE_ERROR="$out"
+    logf "git clone $url -> $target failed: $out"
+  else
+    TTGIT_CLONE_ERROR=""
+  fi
+  return "$rc"
 }
 
 # Sync a repo entry from the TT store to the system (TT -> system).
@@ -318,7 +335,7 @@ function syncRepoToSystem() {
     if ttGitClone "$url" "$branch" "$sysdir"; then
       note "Cloned repo" "$sysdir ($url)"
     else
-      err "Clone of $url failed"
+      err "Clone of $url failed: ${TTGIT_CLONE_ERROR:-unknown error}"
       note "Failed repo clone" "$sysdir ($url)"
     fi
     return
@@ -331,7 +348,7 @@ function syncRepoToSystem() {
     if ttGitClone "$url" "$branch" "$sysdir"; then
       note "Replaced non-repo with clone" "$sysdir (backup: $sysdir.ttbak)"
     else
-      err "Clone of $url failed"
+      err "Clone of $url failed (backup kept at $sysdir.ttbak): ${TTGIT_CLONE_ERROR:-unknown error}"
       note "Failed repo clone" "$sysdir (backup: $sysdir.ttbak)"
     fi
     return
@@ -367,7 +384,8 @@ function syncRepoToSystem() {
   behind=$(echo "$counts" | awk '{print $2+0}')
 
   if [ "$dirty" -eq 1 ] || { [ "$ahead" -gt 0 ] && [ "$behind" -gt 0 ]; }; then
-    if [ "$force" != "true" ]; then
+    # Case-insensitive, matching tui/core/repo.py's spec.force (.lower() == "true").
+    if [ "$(printf '%s' "$force" | tr '[:upper:]' '[:lower:]')" != true ]; then
       log "${YL}local changes${RESET} - skipped"
       warn "$sysdir has local changes - not touched (set force = true in .ttgit to override)"
       note "Skipped repo (local changes)" "$sysdir"

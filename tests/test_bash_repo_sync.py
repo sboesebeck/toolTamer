@@ -83,6 +83,16 @@ def test_is_repo_entry_false_for_plain_directory(tmp_path: Path):
     assert result.stdout.strip() == "NO"
 
 
+def test_is_repo_entry_true_when_marker_is_a_directory(tmp_path: Path):
+    """isRepoEntry must fail CLOSED: anything at the marker path — even a
+    directory, which [ -f ] alone would call "not a repo entry" — counts,
+    so a corrupted marker is reported as broken rather than mirrored."""
+    store = tmp_path / "store"
+    (store / ".ttgit").mkdir(parents=True)
+    result = run_bash(f'isRepoEntry "{store}" && echo YES || echo NO', tmp_path)
+    assert result.stdout.strip() == "YES"
+
+
 def test_read_repo_spec_returns_values(tmp_path: Path):
     store = tmp_path / "store"
     make_marker(store, "git@example.com:me/r.git", branch="dev", force=True)
@@ -121,6 +131,52 @@ def test_bash_and_python_agree_on_the_same_marker(tmp_path: Path):
     assert spec.force is (
         run_bash(f'readRepoSpec "{store}" force', tmp_path).stdout.strip() == "true"
     )
+
+
+def test_bash_and_python_agree_on_duplicate_keys(tmp_path: Path):
+    """A repeated key must resolve the same way in both parsers: LAST
+    occurrence wins, matching tui/core/repo.py's read_marker (a dict built
+    by iterating lines, so a later assignment overwrites an earlier one).
+
+    This is the realistic "I appended force = false to turn force off"
+    marker. If bash took the first occurrence instead, it would still see
+    force = true and run `git reset --hard` while the TUI shows force off
+    — the exact divergence this feature exists to prevent."""
+    from tui.core.repo import read_marker
+
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / ".ttgit").write_text(
+        "url    = git@example.com:me/a.git\n"
+        "force  = true\n"
+        "url    = git@example.com:me/b.git\n"
+        "force  = false\n"
+    )
+    spec = read_marker(store)
+    assert spec.url == "git@example.com:me/b.git"
+    assert spec.force is False
+
+    assert run_bash(f'readRepoSpec "{store}" url', tmp_path).stdout.strip() == spec.url
+    assert run_bash(f'readRepoSpec "{store}" force', tmp_path).stdout.strip() == "false"
+
+
+def test_bash_and_python_agree_on_case_insensitive_force(tmp_path: Path):
+    """force = TRUE (any case) must be treated as true by both sides —
+    Python via .lower() == "true" in read_marker, bash via the tr-based
+    fold in syncRepoToSystem. Pinning it here at the raw-value level:
+    both parsers must at least extract the same raw string so the fold
+    downstream operates on identical input."""
+    from tui.core.repo import read_marker
+
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / ".ttgit").write_text("url    = git@example.com:me/r.git\nforce  = TRUE\n")
+    spec = read_marker(store)
+    assert spec.force is True
+
+    raw = run_bash(f'readRepoSpec "{store}" force', tmp_path).stdout.strip()
+    assert raw == "TRUE"
+    assert (raw.lower() == "true") is spec.force
 
 
 def test_tt_git_top_level_for_repo_root(tmp_path: Path, origin_repo: Path):
@@ -222,6 +278,25 @@ def test_sync_repo_resets_dirty_worktree_with_force(tmp_path: Path, origin_repo:
     assert "Reset repo" in _summary(tmp_path)
 
 
+def test_sync_repo_resets_dirty_worktree_with_uppercase_force(tmp_path: Path, origin_repo: Path):
+    """force = TRUE must reset just like force = true (Important 3: bash
+    must fold case the same way tui/core/repo.py's spec.force does)."""
+    store = tmp_path / "store"
+    store.mkdir(parents=True)
+    (store / ".ttgit").write_text(f"url    = {origin_repo}\nbranch = main\nforce  = TRUE\n")
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+    (target / "README.md").write_text("my work\n")
+    (target / "junk.txt").write_text("junk\n")
+
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert (target / "README.md").read_text() == "one\n"
+    assert not (target / "junk.txt").exists()
+    assert "Reset repo" in _summary(tmp_path)
+
+
 def test_sync_repo_skips_on_origin_mismatch(tmp_path: Path, origin_repo: Path):
     store = tmp_path / "store"
     make_marker(store, "git@example.com:someone/else.git")
@@ -247,12 +322,29 @@ def test_sync_repo_reports_marker_without_url(tmp_path: Path):
     assert not target.exists()
 
 
-def test_sync_file_routes_repo_entries_away_from_mirror(tmp_path: Path, origin_repo: Path):
-    """syncFile must not call syncDirToSystem for a repo entry."""
+def test_sync_repo_clone_failure_after_backup_leaves_backup_intact(tmp_path: Path):
+    """Highest-blast-radius transition: target exists, is not a repo, gets
+    moved to .ttbak, and the clone then fails (bad URL here — offline and
+    deterministic). The original content must survive under .ttbak and the
+    summary must name that backup so the user can find it."""
     store = tmp_path / "store"
-    make_marker(store, str(origin_repo))
+    make_marker(store, str(tmp_path / "does-not-exist.git"))
     target = tmp_path / "sys" / "nvim"
+    target.mkdir(parents=True)
+    (target / "mine.txt").write_text("my original content\n")
 
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert not target.exists()
+    backup = tmp_path / "sys" / "nvim.ttbak"
+    assert (backup / "mine.txt").read_text() == "my original content\n"
+    summary = _summary(tmp_path)
+    assert "nvim.ttbak" in summary
+
+
+def _run_sync_file(target: Path, store: Path, tmp_path: Path) -> subprocess.CompletedProcess:
+    """Slice syncFile out of bin/tt (Ruling R6) and run it against a real
+    target/store pair, with include.sh sourced first."""
     tt = REPO_ROOT / "bin" / "tt"
     tt_tmp = tmp_path / "tt-tmp"
     tt_tmp.mkdir(parents=True, exist_ok=True)
@@ -273,10 +365,43 @@ def test_sync_file_routes_repo_entries_away_from_mirror(tmp_path: Path, origin_r
         f'source "{sync_file_path}"\n'
         f'syncFile "{target}" "{store}"\n'
     )
-    subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+
+def test_sync_file_routes_repo_entries_away_from_mirror(tmp_path: Path, origin_repo: Path):
+    """syncFile must not call syncDirToSystem for a repo entry."""
+    store = tmp_path / "store"
+    make_marker(store, str(origin_repo))
+    target = tmp_path / "sys" / "nvim"
+
+    _run_sync_file(target, store, tmp_path)
 
     assert (target / "README.md").is_file()
     assert (target / ".git").exists()
+
+
+def test_sync_file_survives_when_ttgit_marker_is_a_directory(tmp_path: Path, origin_repo: Path):
+    """Regression: isRepoEntry must fail CLOSED. If `.ttgit` is itself a
+    directory rather than a regular file, isRepoEntry must still report
+    "this is a repo entry" so syncFile routes to syncRepoToSystem (which
+    reports a broken marker and touches nothing) instead of falling
+    through to syncDirToSystem -> mirrorDir, which would delete every
+    file on the system side that isn't in the (near-empty) store."""
+    store = tmp_path / "store"
+    store.mkdir(parents=True)
+    (store / ".ttgit").mkdir()  # marker path exists but is a directory
+
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+    (target / "mine.txt").write_text("my work\n")
+
+    _run_sync_file(target, store, tmp_path)
+
+    assert (target / "README.md").is_file()
+    assert (target / "mine.txt").read_text() == "my work\n"
+    assert (target / ".git").exists()
+    assert "Broken repo entry" in _summary(tmp_path)
 
 
 def test_capture_repo_updates_marker_on_new_origin(tmp_path: Path, origin_repo: Path):
@@ -288,7 +413,7 @@ def test_capture_repo_updates_marker_on_new_origin(tmp_path: Path, origin_repo: 
 
     result = run_bash(f'captureRepoFromSystem "{target}" "{store}"; echo "rc=$?"', tmp_path)
 
-    assert "rc=0" in result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "rc=0"
     marker = (store / ".ttgit").read_text()
     assert str(origin_repo) in marker
     assert "branch = main" in marker
@@ -304,7 +429,7 @@ def test_capture_repo_is_a_noop_when_marker_matches(tmp_path: Path, origin_repo:
 
     result = run_bash(f'captureRepoFromSystem "{target}" "{store}"; echo "rc=$?"', tmp_path)
 
-    assert "rc=1" in result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "rc=1"
     assert (store / ".ttgit").read_text() == before
 
 
@@ -329,7 +454,7 @@ def test_capture_repo_leaves_marker_when_target_is_not_a_repo(tmp_path: Path):
 
     result = run_bash(f'captureRepoFromSystem "{target}" "{store}"; echo "rc=$?"', tmp_path)
 
-    assert "rc=2" in result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "rc=2"
     assert (store / ".ttgit").read_text() == before
 
 
