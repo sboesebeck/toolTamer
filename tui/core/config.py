@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from tui.core.repo import RepoSpec, read_marker
+from tui.core.repo import RepoSpec, detect, read_marker, write_marker
 
 
 def _resolve_effective_target(stored: str, target: str) -> str:
@@ -320,6 +320,8 @@ class TTConfig:
         source: Path,
         chain_config: str | None = None,
         home: Path | None = None,
+        as_repo: bool = False,
+        repo_spec: RepoSpec | None = None,
     ) -> list[str]:
         """Add a file or directory under $HOME to a config.
 
@@ -327,11 +329,43 @@ class TTConfig:
           entry; instead the copy inside that directory snapshot is updated.
         - Adding a directory snapshots the whole tree and absorbs entries of
           the destination config whose target lies inside the directory.
+        - `as_repo=True` adds a git-repo entry instead: only a `.ttgit`
+          marker is written to the store (no `copytree`), and sub-entries
+          are left where they are — a repo does not contain separately
+          tracked files, so they only get a warning, not an absorption.
         Returns a human-readable report of what happened."""
         home = home or Path.home()
         rel = source.relative_to(home).as_posix()
         report: list[str] = []
         scope = list(dict.fromkeys(self.resolve_chain(chain_config or dest_config) + [dest_config]))
+
+        if as_repo:
+            spec = repo_spec or detect(source)
+            if spec is None:
+                return [f"ERROR: ~/{rel} is not a git repository root"]
+            store = self.configs_dir / dest_config / "files" / rel
+            if store.is_dir() and not store.is_symlink():
+                shutil.rmtree(store)
+            elif store.exists() or store.is_symlink():
+                store.unlink()
+            write_marker(store, spec)
+            self.add_file_mapping(dest_config, rel, rel)
+            report.append(
+                f"Added repo ~/{rel} to '{dest_config}' ({spec.url}"
+                + (f", branch {spec.branch}" if spec.branch else "")
+                + ")"
+            )
+            for cfg in scope:
+                if cfg == dest_config:
+                    continue
+                for stored, target in self.get_file_mappings(cfg):
+                    eff = _resolve_effective_target(stored, target)
+                    if _path_within(eff, rel):
+                        report.append(
+                            f"WARNING: ~/{eff} is also mapped in '{cfg}' — it lies inside "
+                            f"repo ~/{rel} and is no longer managed by ToolTamer's copy path"
+                        )
+            return report
 
         if source.is_dir() and not source.is_symlink():
             dest_target = self.configs_dir / dest_config / "files" / rel
@@ -383,6 +417,26 @@ class TTConfig:
         self.add_file_mapping(dest_config, rel, rel)
         report.append(f"{'Updated' if existed else 'Added'} ~/{rel} in '{dest_config}'")
         return report
+
+    def convert_to_repo(self, config: str, stored: str, spec: RepoSpec) -> list[str]:
+        """Turn an existing tracked directory into a git-repo entry.
+
+        The stored copy is deleted and replaced by a .ttgit marker; the
+        files.conf entry stays exactly as it is."""
+        store = self.configs_dir / config / "files" / stored
+        removed = 0
+        if store.is_dir() and not store.is_symlink():
+            removed = sum(1 for _ in iter_tree_files(store))
+            shutil.rmtree(store)
+        elif store.exists() or store.is_symlink():
+            removed = 1
+            store.unlink()
+        write_marker(store, spec)
+        return [
+            f"Converted '{config}':{stored} to a repo entry ({spec.url}"
+            + (f", branch {spec.branch}" if spec.branch else "")
+            + f"); removed {removed} stored file(s)"
+        ]
 
     def _absorb_into_dir(self, config: str, dir_stored: str, dir_eff: str) -> list[str]:
         """Remove entries of `config` whose effective target lies inside the

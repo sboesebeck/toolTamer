@@ -1,5 +1,6 @@
 from pathlib import Path
 from tui.core.config import TTConfig
+from tui.core.repo import RepoSpec
 
 
 def test_list_configs(tmp_config: Path):
@@ -201,3 +202,54 @@ def test_file_mapping_with_marker_is_a_repo(tmp_config: Path):
     assert m.repo is not None
     assert m.repo.url == "git@example.com:me/nvim.git"
     assert m.repo.branch == "main"
+
+
+def test_add_path_as_repo_writes_only_the_marker(tmp_config: Path, tmp_path: Path):
+    home = tmp_path / "home"
+    src = home / ".config" / "nvim"
+    src.mkdir(parents=True)
+    (src / "init.lua").write_text("-- big file\n")
+
+    cfg = TTConfig(tmp_config)
+    cfg.add_path(
+        "testhost", src, home=home, as_repo=True,
+        repo_spec=RepoSpec(url="git@example.com:me/nvim.git", branch="main"),
+    )
+
+    store = tmp_config / "configs" / "testhost" / "files" / ".config" / "nvim"
+    assert (store / ".ttgit").is_file()
+    assert not (store / "init.lua").exists()
+    assert ".config/nvim;.config/nvim" in (
+        tmp_config / "configs" / "testhost" / "files.conf"
+    ).read_text()
+
+
+def test_convert_to_repo_removes_stored_content(tmp_config: Path):
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    (store / "lua").mkdir(parents=True)
+    (store / "init.lua").write_text("-- copied\n")
+    (store / "lua" / "opts.lua").write_text("-- copied\n")
+
+    cfg = TTConfig(tmp_config)
+    report = cfg.convert_to_repo(
+        "testhost", "nvim", RepoSpec(url="git@example.com:me/nvim.git", branch="main")
+    )
+
+    assert (store / ".ttgit").is_file()
+    assert not (store / "init.lua").exists()
+    assert not (store / "lua").exists()
+    assert any("nvim" in line for line in report)
+
+
+def test_convert_to_repo_keeps_the_files_conf_entry(tmp_config: Path):
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    (host / "files" / "nvim").mkdir(parents=True)
+    (host / "files" / "nvim" / "init.lua").write_text("x\n")
+
+    cfg = TTConfig(tmp_config)
+    cfg.convert_to_repo("testhost", "nvim", RepoSpec(url="u", branch="main"))
+
+    assert cfg.get_file_mappings("testhost") == [("nvim", ".config/nvim")]
