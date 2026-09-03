@@ -17,12 +17,12 @@ def test_classify_buckets_every_status(state: str, bucket: str):
     assert classify(state) == bucket
 
 
-def test_classify_covers_every_status_value():
-    """Every RepoStatus status() can return must have a bucket — a new status
-    added later must not silently fall into a default."""
-    from tui.core.repo import ALL_STATUSES
-    for state in ALL_STATUSES:
-        assert classify(state) in {"synced", "changed", "missing", "broken"}
+def test_every_status_has_a_bucket():
+    """_BUCKETS must cover exactly the statuses status() can return — this is
+    the assertion that goes red when someone adds a status and forgets the
+    bucket, which the old `in {…}` form could never do."""
+    from tui.core.repo import ALL_STATUSES, _BUCKETS
+    assert sorted(_BUCKETS) == sorted(ALL_STATUSES)
 
 
 def test_read_marker_returns_none_without_marker(tmp_path: Path):
@@ -64,6 +64,35 @@ def test_read_marker_keys_are_case_sensitive(tmp_path: Path):
     spec = read_marker(tmp_path)
     assert spec is not None
     assert spec.url == ""
+
+
+def test_read_marker_fails_open_when_marker_is_a_directory(tmp_path: Path):
+    """R21: is_file() is False for a directory named .ttgit, which used to
+    make read_marker return None — treating the entry as plain content and
+    disarming the repo guard in _do_apply (rmtree + copytree over a real
+    repo). It must instead be reported as a broken repo entry (invalid_spec),
+    never as "not a repo entry at all"."""
+    from tui.core.repo import status
+
+    (tmp_path / MARKER_NAME).mkdir()
+    spec = read_marker(tmp_path)
+    assert spec is not None
+    assert spec.url == ""
+    assert status(tmp_path / "wherever", spec) == "invalid_spec"
+
+
+def test_a_directory_marker_still_reads_as_is_repo(tmp_path: Path):
+    """Same regression as above, checked at the FileMapping level: is_repo
+    must stay True for a malformed (directory) marker so the sync/apply
+    guards that gate on it stay armed instead of silently falling through
+    to plain-file handling."""
+    from tui.core.config import FileMapping
+
+    (tmp_path / MARKER_NAME).mkdir()
+    mapping = FileMapping(
+        stored="myrepo", target=".myrepo", config="common", repo_path=tmp_path
+    )
+    assert mapping.is_repo is True
 
 
 def test_write_marker_roundtrips(tmp_path: Path):

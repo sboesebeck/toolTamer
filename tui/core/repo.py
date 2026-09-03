@@ -29,9 +29,21 @@ def read_marker(store_dir: Path) -> RepoSpec | None:
     Returns None when there is no marker. A marker without a `url` yields a
     RepoSpec with an empty url — callers report that as `invalid_spec`
     rather than silently treating the entry as a plain directory.
+
+    R21: `marker.is_file()` is False both when there is truly no marker AND
+    when `.ttgit` exists but is a directory (or some other non-regular-file
+    entry) — and treating that second case as "no marker" used to make
+    FileMapping.is_repo False, disarming the repo guard in
+    FileScreen._do_apply and letting it rmtree+copytree over a real repo.
+    So the existence check here is deliberately broader than "is a regular
+    file": anything at all that exists at the marker path counts as a
+    marker, and read_text() below (via its except clause) is what turns an
+    unreadable one into a reported `invalid_spec` rather than silence. This
+    is the safe direction to err in: an ambiguous marker path is treated as
+    a repo entry, never as a plain directory to be mirrored.
     """
     marker = store_dir / MARKER_NAME
-    if not marker.is_file():
+    if not (marker.exists() or marker.is_symlink()):
         return None
     values: dict[str, str] = {}
     try:
@@ -129,8 +141,14 @@ def classify(state: RepoStatus) -> str:
 
     Both the file list and the status bar need this mapping, and they used to
     encode it separately — which is how a synced repo entry ended up counted
-    as "changed" in the status bar. One definition, two consumers."""
-    return _BUCKETS.get(state, "broken")
+    as "changed" in the status bar. One definition, two consumers.
+
+    Raises KeyError for a state not in _BUCKETS rather than defaulting it to
+    "broken": status() is the only producer of these values and lives in
+    this same module, so an unmapped state is a bug here, and R23 wants that
+    caught by test_every_status_has_a_bucket rather than silently mislabeled
+    for a user."""
+    return _BUCKETS[state]
 
 
 def _effective_branch(system_path: Path, spec: RepoSpec) -> str:
