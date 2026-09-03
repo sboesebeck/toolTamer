@@ -157,7 +157,7 @@ def detect(system_path: Path) -> RepoSpec | None:
     return RepoSpec(url=url, branch=current_branch(system_path))
 
 
-RepoStatus = str  # one of the nine literals documented in the plan/spec
+RepoStatus = str  # one of the ten literals documented in the plan/spec
 
 ALL_STATUSES = (
     "ok", "ahead", "behind", "dirty", "diverged",

@@ -757,7 +757,21 @@ class FileScreen(Screen):
         repo_file = self._tt_config.configs_dir / config / "files" / stored
         host = self._system.hostname
 
+        import os as _os
+
         from tui.core.repo import read_marker as _read_marker
+        if repo_file.is_dir() and not _os.access(repo_file, _os.R_OK | _os.X_OK):
+            # Same guard _do_apply carries, for the same reason: read_marker
+            # stats a path *inside* repo_file, so an unreadable store dir
+            # makes it raise PermissionError — here, straight out of a key
+            # handler. Report instead.
+            log = self.query_one("#file-diff", RichLog)
+            log.clear()
+            log.write(Text(
+                f"Cannot read {repo_file} — store entry unreadable, skipped",
+                style="bold red",
+            ))
+            return
         if _read_marker(repo_file) is not None:
             log = self.query_one("#file-diff", RichLog)
             log.clear()

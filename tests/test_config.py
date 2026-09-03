@@ -414,3 +414,73 @@ def test_adding_a_file_inside_a_repo_entry_is_refused_and_says_why(
     text = " ".join(report)
     assert "repo entry" in text
     assert "snapshot" not in text
+
+
+def test_adding_a_file_is_unaffected_by_an_unrelated_unreadable_store_dir(
+    tmp_config: Path, tmp_path: Path
+):
+    """Regression from the I3 fix: _find_covering consulted read_marker for
+    every candidate store dir before checking whether it covers the path at
+    all. read_marker stats <store>/.ttgit, which needs search permission on
+    the store dir and raises on this environment — so one unreadable tracked
+    directory anywhere in scope broke `n` for every regular file, as an
+    unhandled exception in a Textual key handler."""
+    import os
+
+    cfg = TTConfig(tmp_config)
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("secretdir;.config/secretdir\n")
+    secret = host / "files" / "secretdir"
+    secret.mkdir(parents=True)
+    (secret / "inner.txt").write_text("x\n")
+    os.chmod(secret, 0o000)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    src = home / "newfile.txt"
+    src.write_text("hello\n")
+
+    try:
+        assert cfg.find_covering_dir("newfile.txt", ["testhost"]) is None
+        report = cfg.add_path("testhost", src, home=home)
+        assert report == ["Added ~/newfile.txt in 'testhost'"]
+        assert (host / "files" / "newfile.txt").read_text() == "hello\n"
+    finally:
+        os.chmod(secret, 0o755)
+
+
+def test_adding_a_file_inside_an_unreadable_tracked_directory_refuses(
+    tmp_config: Path, tmp_path: Path
+):
+    """The other half: a store dir that DOES cover the path and cannot be
+    read must not be guessed at. Treating it as a plain directory snapshot
+    would write into a possible repo entry — the I3 bug again — so it is
+    refused with an honest message instead."""
+    import os
+
+    cfg = TTConfig(tmp_config)
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("secretdir;.config/secretdir\n")
+    secret = host / "files" / "secretdir"
+    secret.mkdir(parents=True)
+    (secret / "inner.txt").write_text("x\n")
+    os.chmod(secret, 0o000)
+
+    home = tmp_path / "home"
+    src = home / ".config" / "secretdir" / "newfile.txt"
+    src.parent.mkdir(parents=True)
+    src.write_text("hello\n")
+
+    try:
+        assert cfg.find_covering_dir(".config/secretdir/newfile.txt", ["testhost"]) is None
+        assert cfg.find_covering_repo(".config/secretdir/newfile.txt", ["testhost"]) is None
+        covering = cfg.find_covering_unreadable(".config/secretdir/newfile.txt", ["testhost"])
+        assert covering is not None and covering.effective_target == ".config/secretdir"
+
+        report = cfg.add_path("testhost", src, home=home)
+        text = " ".join(report)
+        assert "cannot be read" in text
+        assert "nothing added" in text
+        assert cfg.get_file_mappings("testhost") == [("secretdir", ".config/secretdir")]
+    finally:
+        os.chmod(secret, 0o755)

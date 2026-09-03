@@ -1127,3 +1127,35 @@ async def test_filtering_does_not_recompute_repo_status(tmp_path: Path):
             screen._refresh_files()
             await pilot.pause()
             assert builds == [1]
+
+
+def test_save_change_reports_an_unreadable_store_instead_of_raising(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    """action_save_change called read_marker with no access guard, so an
+    unreadable store directory raised PermissionError straight out of the `u`
+    key handler. _do_apply has carried this guard since C1; `u` did not."""
+    import os
+
+    home = tmp_path / "home"
+    (home / ".config" / "nvim").mkdir(parents=True)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    (store / "init.lua").write_text("-- stored\n")
+    os.chmod(store, 0o000)
+
+    try:
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        screen = _bare_screen(tmp_config, [])
+        log = _FakeLog()
+        screen.query_one = lambda *a, **k: log
+        screen._get_selected = lambda: ("testhost", "nvim", ".config/nvim")
+
+        screen.action_save_change()
+
+        assert any("unreadable" in line for line in log.lines), log.lines
+    finally:
+        os.chmod(store, 0o755)

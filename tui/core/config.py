@@ -330,22 +330,41 @@ class TTConfig:
         self.remove_file_mapping(config, stored, target)
         return self._delete_stored_if_unreferenced(config, stored)
 
-    def _find_covering(self, rel: str, configs, want_repo: bool) -> FileMapping | None:
+    @staticmethod
+    def _store_kind(store: Path) -> str:
+        """'repo' | 'dir' | 'unreadable' for a store directory.
+
+        read_marker stats <store>/.ttgit, which needs search permission on
+        `store` itself and raises PermissionError when it is missing (pathlib
+        only swallows ENOENT/ENOTDIR/EBADF/ELOOP, not EACCES). An unreadable
+        store gets its own answer rather than being guessed at: calling it a
+        plain snapshot is the I3 bug again, and calling it a repo entry would
+        be an equally unfounded claim."""
+        try:
+            return "repo" if read_marker(store) is not None else "dir"
+        except OSError:
+            return "unreadable"
+
+    def _find_covering(self, rel: str, configs, kind: str) -> FileMapping | None:
         """Deepest tracked directory entry whose effective target contains
-        `rel`, restricted to repo entries (`want_repo`) or to plain directory
-        snapshots. Returns None when nothing covers the path."""
+        `rel` and whose store side is of `kind`. None when nothing matches.
+
+        The `_path_within` test comes first, before any I/O on the store: an
+        unrelated tracked directory that the caller is not adding into must
+        never be able to affect — or break — the answer."""
         best: FileMapping | None = None
         for cfg in configs:
             for stored, target in self.get_file_mappings(cfg):
+                eff = _resolve_effective_target(stored, target)
+                if not _path_within(rel, eff):
+                    continue
                 repo = self.configs_dir / cfg / "files" / stored
                 if not repo.is_dir() or repo.is_symlink():
                     continue
-                if (read_marker(repo) is not None) != want_repo:
+                if self._store_kind(repo) != kind:
                     continue
-                eff = _resolve_effective_target(stored, target)
-                if _path_within(rel, eff):
-                    if best is None or len(eff) > len(best.effective_target):
-                        best = FileMapping(stored, target, cfg, repo)
+                if best is None or len(eff) > len(best.effective_target):
+                    best = FileMapping(stored, target, cfg, repo)
         return best
 
     def find_covering_dir(self, rel: str, configs) -> FileMapping | None:
@@ -356,13 +375,18 @@ class TTConfig:
         Repo entries are deliberately excluded: their store side is a marker
         directory, not a snapshot, so writing a file into it would produce a
         copy neither engine ever syncs. Use find_covering_repo for those."""
-        return self._find_covering(rel, configs, want_repo=False)
+        return self._find_covering(rel, configs, kind="dir")
 
     def find_covering_repo(self, rel: str, configs) -> FileMapping | None:
         """Find a tracked *repo entry* whose effective target contains `rel`.
         ToolTamer tracks such a repository as a whole; individual files inside
         it are not separately trackable."""
-        return self._find_covering(rel, configs, want_repo=True)
+        return self._find_covering(rel, configs, kind="repo")
+
+    def find_covering_unreadable(self, rel: str, configs) -> FileMapping | None:
+        """Find a tracked directory covering `rel` whose stored copy cannot be
+        read, so neither of the two finders above can answer for it."""
+        return self._find_covering(rel, configs, kind="unreadable")
 
     def add_path(
         self,
@@ -429,6 +453,15 @@ class TTConfig:
             return report
 
         # Regular file
+        covering_blind = self.find_covering_unreadable(rel, scope)
+        if covering_blind is not None:
+            return [
+                f"~/{rel} lies inside tracked directory "
+                f"~/{covering_blind.effective_target} ('{covering_blind.config}'), "
+                f"whose stored copy cannot be read — refusing rather than "
+                f"guessing whether it is a repo entry; nothing added"
+            ]
+
         covering_repo = self.find_covering_repo(rel, scope)
         if covering_repo is not None:
             # I3: a repo entry's store side holds only .ttgit. Writing the
