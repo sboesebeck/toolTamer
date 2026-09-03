@@ -67,3 +67,21 @@ async def test_save_choice_options_visible_when_both_exist():
         _assert_option_visible(ol.get_option_at_index(0), "a")
         _assert_option_visible(ol.get_option_at_index(1), "l")
         _assert_option_visible(ol.get_option_at_index(2), "c")
+
+
+from tui.screens.files import FileScreen
+
+
+@pytest.mark.parametrize("state,token", [
+    ("ok", "OK"),
+    ("ahead", "OK"),
+    ("behind", "!!"),
+    ("dirty", "!!"),
+    ("diverged", "!!"),
+    ("missing", "--"),
+    ("not_a_repo", "??"),
+    ("wrong_origin", "??"),
+    ("invalid_spec", "??"),
+])
+def test_repo_status_token_mapping(state: str, token: str):
+    assert FileScreen._repo_status_token(state) == token

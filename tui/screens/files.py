@@ -21,6 +21,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
+from tui.core import repo as repo_mod
 from tui.core.config import TTConfig, dir_diff, tree_hash, tree_signature
 from tui.core.diff_render import render_changed_diffs
 from tui.core.system import SystemInfo
@@ -102,11 +103,20 @@ class FileScreen(Screen):
         for m in sorted(mappings, key=lambda x: (x.effective_target, not x.is_effective)):
             eff_target = m.effective_target
             sys_file = home / eff_target
-            status = self._file_status(m.repo_path, sys_file)
+            spec = m.repo
+            if spec is not None:
+                repo_state = repo_mod.status(sys_file, spec)
+                status = {"ok": "ok", "ahead": "ok",
+                          "missing": "missing_system"}.get(repo_state, "modified")
+            else:
+                repo_state = None
+                status = self._file_status(m.repo_path, sys_file)
 
             self_shadow = (not m.is_effective) and m.shadowed_by == m.config
             if not m.is_effective:
                 status_token = "==" if self_shadow else "<<"
+            elif repo_state is not None:
+                status_token = self._repo_status_token(repo_state)
             else:
                 status_token = {
                     "ok": "OK",
@@ -133,7 +143,11 @@ class FileScreen(Screen):
             else:
                 st.stylize("red")
 
-            target_text = Text(f"~/{eff_target}")
+            if spec is not None:
+                target_text = Text(f"~/{eff_target}")
+                target_text.append(f"  ⎇ {spec.branch or 'HEAD'}", style="dim cyan")
+            else:
+                target_text = Text(f"~/{eff_target}")
             cfg_text = Text(m.config)
             if not m.is_effective:
                 target_text.stylize("dim")
@@ -169,6 +183,17 @@ class FileScreen(Screen):
         h = tree_hash(root)
         self._tree_cache[key] = (sig, h)
         return h
+
+    _REPO_TOKENS = {
+        "ok": "OK", "ahead": "OK",
+        "behind": "!!", "dirty": "!!", "diverged": "!!",
+        "missing": "--",
+        "not_a_repo": "??", "wrong_origin": "??", "invalid_spec": "??",
+    }
+
+    @staticmethod
+    def _repo_status_token(state: str) -> str:
+        return FileScreen._REPO_TOKENS.get(state, "??")
 
     def _file_status(self, repo: Path, system: Path) -> str:
         if not repo.exists():
