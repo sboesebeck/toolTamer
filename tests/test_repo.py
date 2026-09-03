@@ -67,6 +67,23 @@ def _run(cwd: Path, *args: str) -> None:
     subprocess.run(args, cwd=cwd, check=True, capture_output=True)
 
 
+def _push_remote_commit(tmp_path: Path, origin_repo: Path, name: str = "remote.txt") -> None:
+    """Clone origin_repo into a throwaway checkout, commit a new file there,
+    and push it — simulates someone else moving the remote branch forward
+    while our `clone` fixture's checkout stays where it was."""
+    other = tmp_path / "other"
+    subprocess.run(
+        ["git", "clone", "--quiet", str(origin_repo), str(other)],
+        check=True, capture_output=True,
+    )
+    _run(other, "git", "config", "user.email", "t@example.com")
+    _run(other, "git", "config", "user.name", "Test")
+    (other / name).write_text("remote\n")
+    _run(other, "git", "add", name)
+    _run(other, "git", "commit", "--quiet", "-m", "remote")
+    _run(other, "git", "push", "--quiet", "origin", "main")
+
+
 @pytest.fixture
 def origin_repo(tmp_path: Path) -> Path:
     """A bare-ish repo that serves as 'the remote' in tests."""
@@ -131,3 +148,74 @@ def test_detect_returns_none_when_repo_has_no_origin(tmp_path: Path):
     solo.mkdir()
     _run(solo, "git", "init", "--quiet", "--initial-branch=main")
     assert detect(solo) is None
+
+
+from tui.core.repo import ahead_behind, status
+
+
+def test_status_invalid_spec_without_url(clone: Path):
+    assert status(clone, RepoSpec(url="")) == "invalid_spec"
+
+
+def test_status_missing_when_path_absent(tmp_path: Path):
+    assert status(tmp_path / "nope", RepoSpec(url="u")) == "missing"
+
+
+def test_status_not_a_repo_for_plain_directory(tmp_path: Path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert status(plain, RepoSpec(url="u")) == "not_a_repo"
+
+
+def test_status_wrong_origin(clone: Path):
+    assert status(clone, RepoSpec(url="git@example.com:other/repo.git")) == "wrong_origin"
+
+
+def test_status_ok_for_clean_clone(clone: Path, origin_repo: Path):
+    assert status(clone, RepoSpec(url=str(origin_repo), branch="main")) == "ok"
+
+
+def test_status_dirty_with_uncommitted_changes(clone: Path, origin_repo: Path):
+    (clone / "README.md").write_text("changed\n")
+    assert status(clone, RepoSpec(url=str(origin_repo), branch="main")) == "dirty"
+
+
+def test_status_dirty_with_untracked_file(clone: Path, origin_repo: Path):
+    (clone / "new.txt").write_text("x\n")
+    assert status(clone, RepoSpec(url=str(origin_repo), branch="main")) == "dirty"
+
+
+def test_status_ahead_with_local_commit(clone: Path, origin_repo: Path):
+    (clone / "local.txt").write_text("local\n")
+    _run(clone, "git", "add", "local.txt")
+    _run(clone, "git", "commit", "--quiet", "-m", "local")
+    assert status(clone, RepoSpec(url=str(origin_repo), branch="main")) == "ahead"
+
+
+def test_status_behind_when_remote_moved(clone: Path, origin_repo: Path, tmp_path: Path):
+    _push_remote_commit(tmp_path, origin_repo)
+
+    assert status(clone, RepoSpec(url=str(origin_repo), branch="main"), fetch=True) == "behind"
+
+
+def test_status_diverged(clone: Path, origin_repo: Path, tmp_path: Path):
+    _push_remote_commit(tmp_path, origin_repo)
+
+    (clone / "local.txt").write_text("local\n")
+    _run(clone, "git", "add", "local.txt")
+    _run(clone, "git", "commit", "--quiet", "-m", "local")
+
+    assert status(clone, RepoSpec(url=str(origin_repo), branch="main"), fetch=True) == "diverged"
+
+
+def test_dirty_beats_behind(clone: Path, origin_repo: Path, tmp_path: Path):
+    """Precedence matters: a dirty repo is skipped regardless of how far
+    behind it is, so `dirty` must win."""
+    _push_remote_commit(tmp_path, origin_repo)
+
+    (clone / "README.md").write_text("dirty\n")
+    assert status(clone, RepoSpec(url=str(origin_repo), branch="main"), fetch=True) == "dirty"
+
+
+def test_ahead_behind_counts(clone: Path):
+    assert ahead_behind(clone, "main") == (0, 0)

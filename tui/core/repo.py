@@ -107,3 +107,63 @@ def detect(system_path: Path) -> RepoSpec | None:
     if rc != 0 or not branch or branch == "HEAD":
         branch = ""
     return RepoSpec(url=url, branch=branch or None)
+
+
+RepoStatus = str  # one of the nine literals documented in the plan/spec
+
+
+def _effective_branch(system_path: Path, spec: RepoSpec) -> str:
+    if spec.branch:
+        return spec.branch
+    _, branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=system_path)
+    return branch or "HEAD"
+
+
+def ahead_behind(system_path: Path, branch: str) -> tuple[int, int]:
+    """Commits the local branch is ahead of / behind origin/<branch>.
+
+    Returns (0, 0) when the comparison is not possible (no such remote
+    branch, detached HEAD, ...) — callers then see 'ok' rather than a
+    misleading sync prompt."""
+    rc, out = _git(
+        ["rev-list", "--left-right", "--count", f"HEAD...origin/{branch}"],
+        cwd=system_path,
+    )
+    if rc != 0 or not out:
+        return 0, 0
+    parts = out.split()
+    if len(parts) != 2:
+        return 0, 0
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return 0, 0
+
+
+def status(system_path: Path, spec: RepoSpec, fetch: bool = False) -> RepoStatus:
+    """Classify a repo entry. See the plan for the precedence order.
+
+    `fetch=False` keeps this cheap and offline: the TUI recomputes it on
+    every refresh. Sync paths pass fetch=True."""
+    if not spec.url:
+        return "invalid_spec"
+    if not system_path.exists():
+        return "missing"
+    found = detect(system_path)
+    if found is None:
+        return "not_a_repo"
+    if found.url != spec.url:
+        return "wrong_origin"
+    if fetch:
+        _git(["fetch", "--quiet", "origin"], cwd=system_path)
+    rc, porcelain = _git(["status", "--porcelain"], cwd=system_path)
+    if rc == 0 and porcelain:
+        return "dirty"
+    ahead, behind = ahead_behind(system_path, _effective_branch(system_path, spec))
+    if ahead and behind:
+        return "diverged"
+    if behind:
+        return "behind"
+    if ahead:
+        return "ahead"
+    return "ok"
