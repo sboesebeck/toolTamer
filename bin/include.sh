@@ -233,6 +233,48 @@ function captureDirFromSystem() {
   return 0
 }
 
+# --- git-repo entries -------------------------------------------------
+#
+# A tracked directory whose store side holds only a .ttgit marker is a
+# repo entry: ToolTamer records where the repository comes from and syncs
+# it with clone/pull instead of mirroring contents. See
+# tui/core/repo.py for the Python side — both parsers must agree.
+
+TTGIT_MARKER=".ttgit"
+
+# True when the store entry $1 is a repo marker instead of content.
+function isRepoEntry() {
+  [ -f "$1/$TTGIT_MARKER" ]
+}
+
+# readRepoSpec <storedir> <key> -- prints the value, empty when unset.
+# Values must not contain '#'; everything from the first '#' is a comment.
+function readRepoSpec() {
+  local marker="$1/$TTGIT_MARKER"
+  [ -f "$marker" ] || return 1
+  sed -e 's/#.*$//' "$marker" |
+    grep -E "^[[:space:]]*$2[[:space:]]*=" |
+    head -1 |
+    cut -f2- -d= |
+    sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+# Prints the repository root of $1, or nothing when $1 is not a repo root.
+# A subdirectory of a repo prints nothing: only roots are trackable.
+function ttGitTopLevel() {
+  local dir="$1"
+  [ -d "$dir" ] || return 1
+  command -v git >/dev/null 2>&1 || return 1
+  local top
+  top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || return 1
+  [ -n "$top" ] || return 1
+  local resolved_dir resolved_top
+  resolved_dir=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
+  resolved_top=$(cd "$top" 2>/dev/null && pwd -P) || return 1
+  [ "$resolved_dir" = "$resolved_top" ] || return 1
+  echo "$resolved_top"
+}
+
 function getInstalledPackages() {
   logn "Preparing list of software for $HOST..."
   for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
