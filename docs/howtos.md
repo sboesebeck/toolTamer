@@ -27,6 +27,15 @@ You have a directory under `~` that is itself a git repository (e.g.
 clone`/`git pull` instead of mirroring its files — and its `.git`
 directory — into the ToolTamer store.
 
+**Do this first: update ToolTamer on every machine that shares this
+config.** The config store travels between your machines on its own, and a
+machine still running an older `tt` does not recognise a `.ttgit` marker.
+It treats the marker directory as a plain tracked directory and mirrors it
+over the repository on that machine — copying the marker in and deleting
+everything else, `.git` and uncommitted work included. Nothing on the new
+side can prevent that, so bring every host up to date before you create
+your first repo entry.
+
 1. Open `tt` (or `tt --admin`) → **File Manager**, then press `n` and pick
    the repository's root directory. With `fzf` installed you get a fuzzy
    picker over everything under `~` (faster when `fd` is also installed);
@@ -51,6 +60,11 @@ sync behavior and its limits.
 You already copy a directory into ToolTamer the normal way, and only
 later turned it into (or noticed it already is) a git repository on your
 system.
+
+The same warning applies here as above: every machine sharing this config
+needs the current `tt` **before** you convert an entry, or an old `tt` on
+another host will mirror the marker directory over your repository and
+delete its contents.
 
 1. Select the entry in the file manager and press `g`. This is only
    offered when the tracked entry is a directory, is not already a repo

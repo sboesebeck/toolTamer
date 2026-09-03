@@ -72,6 +72,19 @@ shellScript;bin/
 
 ### Git repositories
 
+> **Update ToolTamer on every machine before you create your first repo
+> entry.** `files.conf` is deliberately left unchanged by this feature so
+> that old and new versions of `tt` can read the same store — but the
+> *store itself* syncs between your machines, and a machine still running
+> an older `tt` does not know what a `.ttgit` marker is. It sees the marker
+> directory as an ordinary tracked directory and mirrors it onto the
+> system: the marker is copied in, and everything else in the target —
+> including the repository's `.git` directory and any uncommitted work — is
+> deleted as "extra". That is exactly the loss this feature exists to
+> prevent, and no version of `tt` can stop it from the far side. Pull and
+> install the current ToolTamer on every host that shares this config
+> first; only then convert or add the first repo entry.
+
 `files.conf` is unchanged for this case — the entry is still a directory
 mapping like any other. What changes is what's *inside* the entry's
 `files/` directory: instead of a mirrored copy of the directory's
@@ -112,6 +125,7 @@ appears more than once, the last occurrence wins.
 | local commits not yet pushed | left alone — ToolTamer never pushes |
 | uncommitted changes or diverged history, `force = false` (default) | left alone, reported |
 | uncommitted changes or diverged history, `force = true` | hard-reset and cleaned to match `origin/<branch>` |
+| a branch other than `branch` is checked out | skipped, reported — both branches are named |
 | `origin` on the system points somewhere else than `url` | skipped, reported |
 | remote unreachable (`git fetch` fails) | skipped for this run, reported; the rest of the sync continues |
 | `.ttgit` has no `url` | reported as a broken entry, sync skipped |
@@ -121,6 +135,15 @@ for a repo that is dirty or has diverged from its remote branch — it
 changes nothing about the clone-vs-pull decision otherwise, and it never
 makes ToolTamer push. Leave it `false` (the default) for any repository
 you edit locally; set it only for ones you never touch by hand.
+
+ToolTamer never checks out `branch` for you. If the repository is sitting
+on some other branch — or on a detached HEAD — the entry is skipped and
+reported as a branch mismatch, naming both the checked-out branch and the
+one in the marker. That is deliberate: pulling or resetting would act on
+the branch you are standing on, not the one the marker names, and with
+`force = true` that would discard commits the marker never referred to.
+Check the marker's branch out yourself, or press `u` to record the branch
+you are actually on.
 
 Saving a repo entry (system → ToolTamer, the `u` key in the file manager)
 never captures file contents — it only refreshes `url` and `branch` in
