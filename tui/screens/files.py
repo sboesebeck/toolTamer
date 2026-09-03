@@ -800,12 +800,34 @@ class FileScreen(Screen):
             picked = self._pick_with_fzf()
             if picked is None:
                 return
+            self._continue_add(picked)
+        else:
+            self.app.push_screen(AddFileScreen(self._tt_config, self._system))
+
+    def _continue_add(self, picked: Path) -> None:
+        """Ask about repo tracking when `picked` is a repo root, then pick
+        the target config."""
+        spec = repo_mod.detect(picked)
+        if spec is None:
             self.app.push_screen(
                 AddConfigPickScreen(self._tt_config, self._system, picked),
                 callback=lambda _: self._refresh_files(),
             )
-        else:
-            self.app.push_screen(AddFileScreen(self._tt_config, self._system))
+            return
+
+        def _after(choice: str | None) -> None:
+            if choice is None:
+                return
+            self.app.push_screen(
+                AddConfigPickScreen(
+                    self._tt_config, self._system, picked,
+                    as_repo=(choice == "repo"),
+                    repo_spec=spec if choice == "repo" else None,
+                ),
+                callback=lambda _: self._refresh_files(),
+            )
+
+        self.app.push_screen(RepoTrackChoiceScreen(picked, spec), callback=_after)
 
     def _pick_with_fzf(self) -> Path | None:
         """Suspend the TUI, run fzf to pick a file or directory under ~, return
@@ -939,6 +961,64 @@ class ConfirmDeletionsScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class RepoTrackChoiceScreen(ModalScreen[str | None]):
+    """Asked when the path being added is a git repository root: track the
+    clone spec, or copy the contents like any other directory."""
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("r", "pick_repo", "Track as repo"),
+        ("c", "pick_copy", "Copy contents"),
+    ]
+
+    DEFAULT_CSS = """
+    RepoTrackChoiceScreen {
+        align: center middle;
+    }
+    #repo-choice-dialog {
+        width: 76;
+        height: auto;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, source: Path, spec: RepoSpec):
+        super().__init__()
+        self._source = source
+        self._spec = spec
+
+    def compose(self) -> ComposeResult:
+        rel = str(self._source.relative_to(Path.home()))
+        with Container(id="repo-choice-dialog"):
+            yield Label(Text.assemble(
+                ("~/", "cyan"), (rel, "bold cyan"), (" is a git repository", ""),
+            ))
+            yield Label(Text(""))
+            yield Label(Text(f"  origin  {self._spec.url}", style="dim"))
+            yield Label(Text(f"  branch  {self._spec.branch or '(remote HEAD)'}", style="dim"))
+            yield Label(Text(""))
+            yield OptionList(
+                Option("Track as repo — store url/branch, sync with clone/pull", id="repo"),
+                Option("Copy contents — mirror every file into ToolTamer", id="copy"),
+            )
+            yield Label(Text(""))
+            yield Label(Text("r=repo  c=copy  Esc=cancel", style="dim"))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(str(event.option.id))
+
+    def action_pick_repo(self) -> None:
+        self.dismiss("repo")
+
+    def action_pick_copy(self) -> None:
+        self.dismiss("copy")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class AddConfigPickScreen(ModalScreen[str | None]):
     """Pick which config to add a previously-chosen file/directory to."""
 
@@ -958,11 +1038,16 @@ class AddConfigPickScreen(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, tt_config: TTConfig, system: SystemInfo, source: Path):
+    def __init__(
+        self, tt_config: TTConfig, system: SystemInfo, source: Path,
+        as_repo: bool = False, repo_spec: RepoSpec | None = None,
+    ):
         super().__init__()
         self._tt_config = tt_config
         self._system = system
         self._source = source
+        self._as_repo = as_repo
+        self._repo_spec = repo_spec
 
     def compose(self) -> ComposeResult:
         rel = str(self._source.relative_to(Path.home()))
@@ -989,11 +1074,21 @@ class AddConfigPickScreen(ModalScreen[str | None]):
             yield Label(Text(""))
             yield Label(Text("Esc=cancel", style="dim"))
 
+    def _add_to(self, dest: str) -> list[str]:
+        """Perform the add for the target config `dest`. Split out from the
+        event handler so it is testable without a running app."""
+        return self._tt_config.add_path(
+            dest, self._source, self._system.hostname,
+            as_repo=self._as_repo, repo_spec=self._repo_spec,
+        )
+
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         dest = str(event.option.id)
-        report = self._tt_config.add_path(dest, self._source, self._system.hostname)
+        report = self._add_to(dest)
         for line in report[:8]:
             severity = "warning" if line.startswith("WARNING") else "information"
+            if line.startswith("ERROR"):
+                severity = "error"
             self.app.notify(line, severity=severity, timeout=8)
         if len(report) > 8:
             self.app.notify(f"... and {len(report) - 8} more changes", timeout=8)
@@ -1271,7 +1366,35 @@ class AddFileScreen(Screen):
             return
 
         dest = str(event.option.id)
-        report = self._tt_config.add_path(dest, sys_path, self._system.hostname)
+        spec = repo_mod.detect(sys_path)
+        if spec is None:
+            self._finish_add(dest)
+            return
+
+        def _after(choice: str | None) -> None:
+            if choice is None:
+                return
+            self._finish_add(
+                dest, as_repo=(choice == "repo"),
+                repo_spec=spec if choice == "repo" else None,
+            )
+
+        self.app.push_screen(RepoTrackChoiceScreen(sys_path, spec), callback=_after)
+
+    def _add_selected(
+        self, dest: str, as_repo: bool = False, repo_spec: RepoSpec | None = None,
+    ) -> list[str]:
+        """Add the currently selected path to `dest`. Split out from
+        `_finish_add` so it is testable without a running app."""
+        return self._tt_config.add_path(
+            dest, self._selected_path, self._system.hostname,
+            as_repo=as_repo, repo_spec=repo_spec,
+        )
+
+    def _finish_add(
+        self, dest: str, as_repo: bool = False, repo_spec: RepoSpec | None = None,
+    ) -> None:
+        report = self._add_selected(dest, as_repo=as_repo, repo_spec=repo_spec)
         for line in report[:8]:
             severity = "warning" if line.startswith("WARNING") else "information"
             self.app.notify(line, severity=severity, timeout=8)

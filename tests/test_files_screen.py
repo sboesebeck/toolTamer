@@ -346,3 +346,124 @@ def test_save_repo_marker_refuses_when_target_is_not_a_repo(tmp_config: Path, tm
 
     assert read_marker(store).url == old_origin
     assert "not a git repository" in message
+
+
+from tui.screens.files import AddConfigPickScreen, AddFileScreen, RepoTrackChoiceScreen
+
+
+def test_repo_track_choice_screen_offers_both_options(tmp_path: Path):
+    screen = RepoTrackChoiceScreen(
+        tmp_path / "nvim", RepoSpec(url="git@example.com:me/nvim.git", branch="main")
+    )
+    assert screen._source == tmp_path / "nvim"
+    assert screen._spec.url == "git@example.com:me/nvim.git"
+
+
+def test_add_config_pick_screen_forwards_as_repo(tmp_config: Path, tmp_path: Path, monkeypatch):
+    """as_repo must reach add_path — otherwise the repo gets copied."""
+    home = tmp_path / "home"
+    src = home / ".config" / "nvim"
+    src.mkdir(parents=True)
+    (src / "init.lua").write_text("-- big\n")
+
+    calls = {}
+    cfg = TTConfig(tmp_config)
+    original = cfg.add_path
+
+    def spy(*args, **kwargs):
+        calls.update(kwargs)
+        return original(*args, **kwargs)
+
+    cfg.add_path = spy
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = AddConfigPickScreen.__new__(AddConfigPickScreen)
+    screen._tt_config = cfg
+    screen._source = src
+    screen._as_repo = True
+    screen._repo_spec = RepoSpec(url="git@example.com:me/nvim.git", branch="main")
+
+    class _Sys:
+        hostname = "testhost"
+    screen._system = _Sys()
+
+    screen._add_to("testhost")
+
+    assert calls.get("as_repo") is True
+    assert calls.get("repo_spec").url == "git@example.com:me/nvim.git"
+
+
+def test_add_file_screen_forwards_as_repo(tmp_config: Path, tmp_path: Path, monkeypatch):
+    """R5: the non-fzf ('+') add path must also forward as_repo/repo_spec —
+    otherwise a repo picked via AddFileScreen always gets copied."""
+    home = tmp_path / "home"
+    src = home / ".config" / "nvim"
+    src.mkdir(parents=True)
+    (src / "init.lua").write_text("-- big\n")
+
+    calls = {}
+    cfg = TTConfig(tmp_config)
+    original = cfg.add_path
+
+    def spy(*args, **kwargs):
+        calls.update(kwargs)
+        return original(*args, **kwargs)
+
+    cfg.add_path = spy
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = AddFileScreen.__new__(AddFileScreen)
+    screen._tt_config = cfg
+    screen._selected_path = src
+
+    class _Sys:
+        hostname = "testhost"
+    screen._system = _Sys()
+
+    screen._add_selected(
+        "testhost", as_repo=True,
+        repo_spec=RepoSpec(url="git@example.com:me/nvim.git", branch="main"),
+    )
+
+    assert calls.get("as_repo") is True
+    assert calls.get("repo_spec").url == "git@example.com:me/nvim.git"
+
+
+@pytest.mark.asyncio
+async def test_add_file_screen_asks_repo_question_for_a_repo_root(tmp_path: Path, monkeypatch):
+    """Picking a repo root through the '+' browse flow (no fzf) must push
+    RepoTrackChoiceScreen, not silently copy it."""
+    home = tmp_path / "home"
+    src = home / ".config" / "nvim"
+    src.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", "--initial-branch=main"],
+                   cwd=src, check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", "git@example.com:me/nvim.git"],
+                   cwd=src, check=True, capture_output=True)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+    base = tmp_path / "toolTamer"
+    (base / "configs" / "testhost" / "files").mkdir(parents=True)
+    (base / "configs" / "testhost" / "files.conf").write_text("")
+    (base / "configs" / "testhost" / "includes.conf").write_text("")
+    (base / "tt.conf").write_text("")
+
+    system = SystemInfo()
+    monkeypatch.setattr(system, "hostname", "testhost", raising=False)
+
+    class _AddFileHarness(App):
+        def on_mount(self) -> None:
+            self.push_screen(AddFileScreen(TTConfig(base), system))
+
+    app = _AddFileHarness()
+    async with app.run_test() as pilot:
+        add_screen = app.screen
+        add_screen._set_selected(src)
+        option_list = add_screen.query_one("#config-list", OptionList)
+        index = next(
+            i for i in range(option_list.option_count)
+            if option_list.get_option_at_index(i).id == "testhost"
+        )
+        add_screen.on_option_list_option_selected(
+            OptionList.OptionSelected(option_list, index)
+        )
+        await pilot.pause()
+        assert isinstance(app.screen, RepoTrackChoiceScreen)
