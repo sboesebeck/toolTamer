@@ -355,16 +355,10 @@ class TTConfig:
                 + (f", branch {spec.branch}" if spec.branch else "")
                 + ")"
             )
-            for cfg in scope:
-                if cfg == dest_config:
-                    continue
-                for stored, target in self.get_file_mappings(cfg):
-                    eff = _resolve_effective_target(stored, target)
-                    if _path_within(eff, rel):
-                        report.append(
-                            f"WARNING: ~/{eff} is also mapped in '{cfg}' — it lies inside "
-                            f"repo ~/{rel} and is no longer managed by ToolTamer's copy path"
-                        )
+            report += self._warn_overlapping_mappings(
+                scope, dest_config, rel,
+                f"it lies inside repo ~/{rel} and is no longer managed by ToolTamer's copy path",
+            )
             return report
 
         if source.is_dir() and not source.is_symlink():
@@ -378,16 +372,10 @@ class TTConfig:
             self.add_file_mapping(dest_config, rel, rel)
             report.append(f"Added directory ~/{rel} to '{dest_config}'")
             report += self._absorb_into_dir(dest_config, rel, rel)
-            for cfg in scope:
-                if cfg == dest_config:
-                    continue
-                for stored, target in self.get_file_mappings(cfg):
-                    eff = _resolve_effective_target(stored, target)
-                    if _path_within(eff, rel):
-                        report.append(
-                            f"WARNING: ~/{eff} is also mapped in '{cfg}' — it now conflicts "
-                            f"with directory ~/{rel}; consider removing it there"
-                        )
+            report += self._warn_overlapping_mappings(
+                scope, dest_config, rel,
+                f"it now conflicts with directory ~/{rel}; consider removing it there",
+            )
             return report
 
         # Regular file
@@ -416,6 +404,26 @@ class TTConfig:
         dest_target.write_bytes(source.read_bytes())
         self.add_file_mapping(dest_config, rel, rel)
         report.append(f"{'Updated' if existed else 'Added'} ~/{rel} in '{dest_config}'")
+        return report
+
+    def _warn_overlapping_mappings(
+        self, scope: list[str], dest_config: str, rel: str, message: str
+    ) -> list[str]:
+        """Warn about mappings in other configs of `scope` whose effective
+        target lies inside `rel`, the path just added to `dest_config`.
+
+        Shared by the directory and repo branches of `add_path`: both need
+        to flag pre-existing entries that now overlap with what was just
+        added, differing only in the wording of `message` (the tail after
+        "is also mapped in '<cfg>' — ")."""
+        report: list[str] = []
+        for cfg in scope:
+            if cfg == dest_config:
+                continue
+            for stored, target in self.get_file_mappings(cfg):
+                eff = _resolve_effective_target(stored, target)
+                if _path_within(eff, rel):
+                    report.append(f"WARNING: ~/{eff} is also mapped in '{cfg}' — {message}")
         return report
 
     def convert_to_repo(self, config: str, stored: str, spec: RepoSpec) -> list[str]:

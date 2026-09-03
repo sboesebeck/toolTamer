@@ -224,6 +224,53 @@ def test_add_path_as_repo_writes_only_the_marker(tmp_config: Path, tmp_path: Pat
     ).read_text()
 
 
+def test_add_path_as_repo_reports_error_when_source_is_not_a_git_repo(
+    tmp_config: Path, tmp_path: Path
+):
+    home = tmp_path / "home"
+    src = home / ".config" / "nvim"
+    src.mkdir(parents=True)
+    (src / "init.lua").write_text("-- not a repo\n")
+
+    cfg = TTConfig(tmp_config)
+    report = cfg.add_path("testhost", src, home=home, as_repo=True)
+
+    assert any("not a git repository root" in line for line in report)
+    store = tmp_config / "configs" / "testhost" / "files" / ".config" / "nvim"
+    assert not store.exists()
+    assert ".config/nvim" not in (
+        tmp_config / "configs" / "testhost" / "files.conf"
+    ).read_text()
+
+
+def test_add_path_as_repo_warns_about_overlapping_mappings_in_other_configs(
+    tmp_config: Path, tmp_path: Path
+):
+    # macosx is testhost's parent in the chain (common -> macosx -> testhost);
+    # give it a mapping whose effective target lies inside the directory
+    # about to be added as a repo entry to testhost.
+    macosx = tmp_config / "configs" / "macosx"
+    (macosx / "files.conf").write_text(
+        "aerospace.toml;.aerospace.toml\ninit.lua;.config/nvim/init.lua\n"
+    )
+
+    home = tmp_path / "home"
+    src = home / ".config" / "nvim"
+    src.mkdir(parents=True)
+    (src / "init.lua").write_text("-- big file\n")
+
+    cfg = TTConfig(tmp_config)
+    report = cfg.add_path(
+        "testhost", src, home=home, as_repo=True,
+        repo_spec=RepoSpec(url="git@example.com:me/nvim.git", branch="main"),
+    )
+
+    assert any(
+        "WARNING" in line and ".config/nvim/init.lua" in line and "macosx" in line
+        for line in report
+    )
+
+
 def test_convert_to_repo_removes_stored_content(tmp_config: Path):
     host = tmp_config / "configs" / "testhost"
     (host / "files.conf").write_text("nvim;.config/nvim\n")
