@@ -457,6 +457,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#git-repositories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Git repositories
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#includesconf" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -634,6 +645,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#git-repositories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Git repositories
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#includesconf" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -780,27 +802,167 @@ and is then kept.</p>
 </div>
 <h3 id="filesconf"><code>files.conf</code><a class="headerlink" href="#filesconf" title="Permanent link">&para;</a></h3>
 <p>Maps files in the <code>files/</code> subdirectory to their target location relative to <code>$HOME</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a># Format: filename:target_relative_to_home
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>myzshrc:.zshrc
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>myKittyConf:.config/kitty/kitty.conf
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>shellScript:bin/
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a># Format: filename;target_relative_to_home
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>myzshrc;.zshrc
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>myKittyConf;.config/kitty/kitty.conf
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>shellScript;bin/
 </code></pre></div>
 <ul>
 <li>If the target ends with <code>/</code>, the file keeps its original name and is placed in that directory.</li>
 <li>Comparison uses <strong>SHA256 checksums</strong> — if checksums differ, ToolTamer asks what to do.</li>
 </ul>
+<h3 id="git-repositories">Git repositories<a class="headerlink" href="#git-repositories" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Update ToolTamer on every machine before you create your first repo
+entry.</strong> <code>files.conf</code> is deliberately left unchanged by this feature so
+that old and new versions of <code>tt</code> can read the same store — but the
+<em>store itself</em> syncs between your machines, and a machine still running
+an older <code>tt</code> does not know what a <code>.ttgit</code> marker is. It sees the marker
+directory as an ordinary tracked directory and mirrors it onto the
+system: the marker is copied in, and everything else in the target —
+including the repository's <code>.git</code> directory and any uncommitted work — is
+deleted as "extra". That is exactly the loss this feature exists to
+prevent, and no version of <code>tt</code> can stop it from the far side. Pull and
+install the current ToolTamer on every host that shares this config
+first; only then convert or add the first repo entry.</p>
+</blockquote>
+<p><code>files.conf</code> is unchanged for this case — the entry is still a directory
+mapping like any other. What changes is what's <em>inside</em> the entry's
+<code>files/</code> directory: instead of a mirrored copy of the directory's
+contents, it holds only a <code>.ttgit</code> marker file. ToolTamer never stores the
+repository's contents and never mirrors it; it syncs the entry with <code>git
+clone</code> / <code>git pull</code> instead.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>configs/&lt;host&gt;/files.conf
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  nvim;.config/nvim
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>configs/&lt;host&gt;/files/nvim/.ttgit
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>  url    = git@github.com:you/nvim.git
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>  branch = main
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>  force  = false
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Required</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>url</code></td>
+<td>yes</td>
+<td>—</td>
+<td>remote URL, used as <code>origin</code></td>
+</tr>
+<tr>
+<td><code>branch</code></td>
+<td>no</td>
+<td>remote HEAD</td>
+<td>branch to check out</td>
+</tr>
+<tr>
+<td><code>force</code></td>
+<td>no</td>
+<td><code>false</code></td>
+<td><code>true</code> allows a hard reset to the remote</td>
+</tr>
+</tbody>
+</table>
+<p>Everything from the first <code>#</code> in a line is a comment, so values must not
+contain <code>#</code> — but they may contain <code>=</code> (only the first <code>=</code> on a line
+separates key from value). Key names are case-sensitive and must be
+exactly <code>url</code>, <code>branch</code>, <code>force</code>; unknown keys are ignored. If a key
+appears more than once, the last occurrence wins.</p>
+<p><strong>Syncing a repo entry (ToolTamer → system):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>not present on the system yet</td>
+<td>cloned</td>
+</tr>
+<tr>
+<td>present, but not a git repository</td>
+<td>the existing path is moved aside to <code>&lt;path&gt;.ttbak</code>, then cloned</td>
+</tr>
+<tr>
+<td>present, clean, behind the remote</td>
+<td>fast-forward pulled</td>
+</tr>
+<tr>
+<td>present, clean, up to date</td>
+<td>left alone</td>
+</tr>
+<tr>
+<td>local commits not yet pushed</td>
+<td>left alone — ToolTamer never pushes</td>
+</tr>
+<tr>
+<td>uncommitted changes or diverged history, <code>force = false</code> (default)</td>
+<td>left alone, reported</td>
+</tr>
+<tr>
+<td>uncommitted changes or diverged history, <code>force = true</code></td>
+<td>hard-reset and cleaned to match <code>origin/&lt;branch&gt;</code></td>
+</tr>
+<tr>
+<td>a branch other than <code>branch</code> is checked out</td>
+<td>skipped, reported — both branches are named</td>
+</tr>
+<tr>
+<td><code>origin</code> on the system points somewhere else than <code>url</code></td>
+<td>skipped, reported</td>
+</tr>
+<tr>
+<td>remote unreachable (<code>git fetch</code> fails)</td>
+<td>skipped for this run, reported; the rest of the sync continues</td>
+</tr>
+<tr>
+<td><code>.ttgit</code> has no <code>url</code></td>
+<td>reported as a broken entry, sync skipped</td>
+</tr>
+</tbody>
+</table>
+<p><code>force = true</code> only ever authorizes that one hard-reset-and-clean step,
+for a repo that is dirty or has diverged from its remote branch — it
+changes nothing about the clone-vs-pull decision otherwise, and it never
+makes ToolTamer push. Leave it <code>false</code> (the default) for any repository
+you edit locally; set it only for ones you never touch by hand.</p>
+<p>ToolTamer never checks out <code>branch</code> for you. If the repository is sitting
+on some other branch — or on a detached HEAD — the entry is skipped and
+reported as a branch mismatch, naming both the checked-out branch and the
+one in the marker. That is deliberate: pulling or resetting would act on
+the branch you are standing on, not the one the marker names, and with
+<code>force = true</code> that would discard commits the marker never referred to.
+Check the marker's branch out yourself, or press <code>u</code> to record the branch
+you are actually on.</p>
+<p>Saving a repo entry (system → ToolTamer, the <code>u</code> key in the file manager)
+never captures file contents — it only refreshes <code>url</code> and <code>branch</code> in
+the marker from the system's current git remote and checked-out branch,
+and only writes the marker back when one of them actually changed.</p>
+<p>ToolTamer does not push, does not pin commits, and does not handle
+submodules. A repository with uncommitted changes or a history that has
+diverged from the remote is skipped, not merged — you resolve it by hand,
+in the repository itself.</p>
 <h3 id="includesconf"><code>includes.conf</code><a class="headerlink" href="#includesconf" title="Permanent link">&para;</a></h3>
 <p>A simple list of config directory names to include, one per line:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>common_mac
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>dev_tools
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>common_mac
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>dev_tools
 </code></pre></div>
 <h3 id="local_installsh"><code>local_install.sh</code><a class="headerlink" href="#local_installsh" title="Permanent link">&para;</a></h3>
 <p>An optional shell script executed every time <code>tt --syncSys</code> (or "Update System") runs. Scripts are executed in order: common → includes → host.</p>
 <p>Use this for installations that can't be handled by the package manager (e.g. manual downloads, pip installs, font installations).</p>
 <h3 id="taps-macos-only"><code>taps</code> (macOS only)<a class="headerlink" href="#taps-macos-only" title="Permanent link">&para;</a></h3>
 <p>A list of Homebrew taps, one per line:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>homebrew/cask-fonts
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>hashicorp/tap
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>homebrew/cask-fonts
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>hashicorp/tap
 </code></pre></div>
 <p>These are added before packages are installed. Note that a package listed
 under its fully qualified name (<code>hashicorp/tap/terraform</code>) does not need an
@@ -814,7 +976,7 @@ regenerated automatically whenever your installed packages change.</p>
 machine and has no business being shared.</p>
 <h2 id="global-settings">Global Settings<a class="headerlink" href="#global-settings" title="Permanent link">&para;</a></h2>
 <p>ToolTamer's own settings are in <code>~/.config/toolTamer/tt.conf</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">GIT_AUTO_UPDATE</span><span class="o">=</span>ask<span class="w">    </span><span class="c1"># true | false | ask — auto git-pull on start</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">GIT_AUTO_UPDATE</span><span class="o">=</span>ask<span class="w">    </span><span class="c1"># true | false | ask — auto git-pull on start</span>
 </code></pre></div>
 
 

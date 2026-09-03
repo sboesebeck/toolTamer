@@ -437,6 +437,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#track-a-git-repository-instead-of-copying-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Track a git repository instead of copying it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convert-an-already-tracked-directory-into-a-repo-entry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convert an already-tracked directory into a repo entry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#move-a-config-file-between-configs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -609,6 +631,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#track-a-git-repository-instead-of-copying-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Track a git repository instead of copying it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convert-an-already-tracked-directory-into-a-repo-entry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convert an already-tracked directory into a repo entry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#move-a-config-file-between-configs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -772,12 +816,68 @@ keys in the footer, so you never have to remember them.</p>
     <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>cp<span class="w"> </span>~/.config/starship.toml<span class="w"> </span>~/.config/toolTamer/configs/common/files/starship.toml
 </code></pre></div></li>
 <li>Add to <code>files.conf</code>:
-    <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>starship.toml:.config/starship.toml
+    <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>starship.toml;.config/starship.toml
 </code></pre></div></li>
 </ol>
 <p><strong>Or from the shell</strong>, without opening the TUI:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>tt<span class="w"> </span>--add<span class="w"> </span>~/.config/starship.toml
 </code></pre></div>
+<h2 id="track-a-git-repository-instead-of-copying-it">Track a git repository instead of copying it<a class="headerlink" href="#track-a-git-repository-instead-of-copying-it" title="Permanent link">&para;</a></h2>
+<p>You have a directory under <code>~</code> that is itself a git repository (e.g.
+<code>~/.config/nvim</code>) and want ToolTamer to keep it up to date via <code>git
+clone</code>/<code>git pull</code> instead of mirroring its files — and its <code>.git</code>
+directory — into the ToolTamer store.</p>
+<p><strong>Do this first: update ToolTamer on every machine that shares this
+config.</strong> The config store travels between your machines on its own, and a
+machine still running an older <code>tt</code> does not recognise a <code>.ttgit</code> marker.
+It treats the marker directory as a plain tracked directory and mirrors it
+over the repository on that machine — copying the marker in and deleting
+everything else, <code>.git</code> and uncommitted work included. Nothing on the new
+side can prevent that, so bring every host up to date before you create
+your first repo entry.</p>
+<ol>
+<li>Open <code>tt</code> (or <code>tt --admin</code>) → <strong>File Manager</strong>, then press <code>n</code> and pick
+   the repository's root directory. With <code>fzf</code> installed you get a fuzzy
+   picker over everything under <code>~</code> (faster when <code>fd</code> is also installed);
+   without <code>fzf</code>, a directory-tree browser.</li>
+<li>ToolTamer detects that the path is the root of a git repository (with
+   an <code>origin</code> remote) and asks whether to <strong>track as repo</strong> or <strong>copy
+   contents</strong>. Picking a plain file, or a directory that is not itself a
+   repo root, skips this and adds it normally.</li>
+<li>Choose <strong>Track as repo</strong>. ToolTamer records the detected <code>origin</code> URL
+   and current branch in a <code>.ttgit</code> marker and adds the usual <code>files.conf</code>
+   entry — the store then holds only that marker, never the repository's
+   contents.</li>
+</ol>
+<p>From then on, <code>a</code> (apply TT → system) clones the repository where it's
+missing and fast-forwards it where it's behind; <code>u</code> (save) only ever
+refreshes the marker's <code>url</code>/<code>branch</code> from the system, never its content.
+See <a href="../configuration/#git-repositories">Git repositories</a> for the full
+sync behavior and its limits.</p>
+<h2 id="convert-an-already-tracked-directory-into-a-repo-entry">Convert an already-tracked directory into a repo entry<a class="headerlink" href="#convert-an-already-tracked-directory-into-a-repo-entry" title="Permanent link">&para;</a></h2>
+<p>You already copy a directory into ToolTamer the normal way, and only
+later turned it into (or noticed it already is) a git repository on your
+system.</p>
+<p>The same warning applies here as above: every machine sharing this config
+needs the current <code>tt</code> <strong>before</strong> you convert an entry, or an old <code>tt</code> on
+another host will mirror the marker directory over your repository and
+delete its contents.</p>
+<ol>
+<li>Select the entry in the file manager and press <code>g</code>. This is only
+   offered when the tracked entry is a directory, is not already a repo
+   entry, and <code>~/&lt;target&gt;</code> on your system is currently the root of a git
+   repository.</li>
+<li>A confirmation dialog shows the detected <code>origin</code> URL and branch, and
+   how many stored files will be removed from the ToolTamer store once
+   the entry becomes a marker-only repo entry. Your system copy is never
+   touched by this step.</li>
+<li>Confirm with <code>y</code>. ToolTamer deletes the entry's stored content and
+   writes a <code>.ttgit</code> marker in its place; <code>files.conf</code> itself does not
+   change.</li>
+</ol>
+<p>If a tracked directory's system side is detected as a git repository root
+but hasn't been converted, the detail pane says so and reminds you that
+<code>g</code> will do it.</p>
 <h2 id="move-a-config-file-between-configs">Move a config file between configs<a class="headerlink" href="#move-a-config-file-between-configs" title="Permanent link">&para;</a></h2>
 <p>You have a file in your host config that should be shared via <code>common</code>:</p>
 <ol>
