@@ -9,6 +9,7 @@ comment) because bin/include.sh parses the same file with grep and cut.
 Values must not contain `#`.
 """
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,3 +61,49 @@ def write_marker(store_dir: Path, spec: RepoSpec) -> None:
     if spec.force:
         lines.append("force  = true")
     (store_dir / MARKER_NAME).write_text("\n".join(lines) + "\n")
+
+
+def git_available() -> bool:
+    import shutil
+    return shutil.which("git") is not None
+
+
+def _git(args: list[str], cwd: Path | None = None) -> tuple[int, str]:
+    """Run git, never raise. Returns (returncode, stripped stdout).
+
+    A missing git binary yields (127, "") so callers can treat it like any
+    other failure instead of crashing the TUI."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd) if cwd else None,
+            capture_output=True, text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return 127, ""
+    return proc.returncode, proc.stdout.strip()
+
+
+def detect(system_path: Path) -> RepoSpec | None:
+    """Return a RepoSpec when `system_path` is the root of a git repo with
+    an `origin` remote, else None.
+
+    Only the root counts: a subdirectory of a repo is not itself trackable
+    as a repo entry."""
+    if not system_path.is_dir():
+        return None
+    rc, top = _git(["rev-parse", "--show-toplevel"], cwd=system_path)
+    if rc != 0 or not top:
+        return None
+    try:
+        if Path(top).resolve() != system_path.resolve():
+            return None
+    except OSError:
+        return None
+    rc, url = _git(["remote", "get-url", "origin"], cwd=system_path)
+    if rc != 0 or not url:
+        return None
+    rc, branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=system_path)
+    if rc != 0 or not branch or branch == "HEAD":
+        branch = ""
+    return RepoSpec(url=url, branch=branch or None)

@@ -54,3 +54,80 @@ def test_write_marker_omits_optional_keys_when_unset(tmp_path: Path):
     text = (tmp_path / MARKER_NAME).read_text()
     assert "branch" not in text
     assert "force" not in text
+
+
+import subprocess
+
+import pytest
+
+from tui.core.repo import detect, git_available
+
+
+def _run(cwd: Path, *args: str) -> None:
+    subprocess.run(args, cwd=cwd, check=True, capture_output=True)
+
+
+@pytest.fixture
+def origin_repo(tmp_path: Path) -> Path:
+    """A bare-ish repo that serves as 'the remote' in tests."""
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    _run(origin, "git", "init", "--quiet", "--bare", "--initial-branch=main")
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _run(seed, "git", "init", "--quiet", "--initial-branch=main")
+    _run(seed, "git", "config", "user.email", "t@example.com")
+    _run(seed, "git", "config", "user.name", "Test")
+    (seed / "README.md").write_text("one\n")
+    _run(seed, "git", "add", "README.md")
+    _run(seed, "git", "commit", "--quiet", "-m", "init")
+    _run(seed, "git", "remote", "add", "origin", str(origin))
+    _run(seed, "git", "push", "--quiet", "origin", "main")
+    return origin
+
+
+@pytest.fixture
+def clone(tmp_path: Path, origin_repo: Path) -> Path:
+    work = tmp_path / "work"
+    subprocess.run(
+        ["git", "clone", "--quiet", str(origin_repo), str(work)],
+        check=True, capture_output=True,
+    )
+    _run(work, "git", "config", "user.email", "t@example.com")
+    _run(work, "git", "config", "user.name", "Test")
+    return work
+
+
+def test_git_is_available_in_the_test_environment():
+    assert git_available() is True
+
+
+def test_detect_returns_none_for_plain_directory(tmp_path: Path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert detect(plain) is None
+
+
+def test_detect_returns_none_for_missing_path(tmp_path: Path):
+    assert detect(tmp_path / "nope") is None
+
+
+def test_detect_reads_origin_and_branch(clone: Path, origin_repo: Path):
+    spec = detect(clone)
+    assert spec is not None
+    assert spec.url == str(origin_repo)
+    assert spec.branch == "main"
+    assert spec.force is False
+
+
+def test_detect_returns_none_for_subdirectory_of_a_repo(clone: Path):
+    sub = clone / "sub"
+    sub.mkdir()
+    assert detect(sub) is None
+
+
+def test_detect_returns_none_when_repo_has_no_origin(tmp_path: Path):
+    solo = tmp_path / "solo"
+    solo.mkdir()
+    _run(solo, "git", "init", "--quiet", "--initial-branch=main")
+    assert detect(solo) is None
