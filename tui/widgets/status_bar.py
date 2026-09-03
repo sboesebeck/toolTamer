@@ -10,6 +10,7 @@ from textual.widget import Widget
 from textual.widgets import Label
 from textual.worker import get_current_worker
 
+from tui.core import repo as repo_mod
 from tui.core.config import TTConfig, tree_hash
 from tui.core.dep_cache import DependencyResolver, default_cache_path
 from tui.core.pkg_names import installed_index, is_installed, short_name
@@ -181,9 +182,26 @@ class StatusBar(Widget):
         total_files = len(mappings)
         modified_files: list[str] = []
         missing_file_names: list[str] = []
+        broken_repos: list[str] = []
         home = Path.home()
         for m in mappings:
             sys_file = home / m.effective_target
+            spec = m.repo
+            if spec is not None:
+                # A repo entry's store side holds only a .ttgit marker, so
+                # comparing tree hashes here (as for a plain file/dir entry)
+                # would always find them different and report every repo
+                # entry as "changed" forever. fetch=False (the default) is
+                # required: this scan runs on a timer, inside a worker, and
+                # must stay offline.
+                bucket = repo_mod.classify(repo_mod.status(sys_file, spec))
+                if bucket == "changed":
+                    modified_files.append(m.effective_target)
+                elif bucket == "missing":
+                    missing_file_names.append(m.effective_target)
+                elif bucket == "broken":
+                    broken_repos.append(m.effective_target)
+                continue
             if not m.repo_path.exists() or not sys_file.exists():
                 missing_file_names.append(m.effective_target)
             elif sys_file.is_dir() and m.repo_path.is_dir():
@@ -207,7 +225,9 @@ class StatusBar(Widget):
             file_text += f", [yellow]{len(modified_files)} changed[/]"
         if missing_file_names:
             file_text += f", [red]{len(missing_file_names)} missing[/]"
-        if not modified_files and not missing_file_names:
+        if broken_repos:
+            file_text += f", [red]{len(broken_repos)} broken[/]"
+        if not modified_files and not missing_file_names and not broken_repos:
             file_text += " [green]— all synced[/]"
 
         file_detail_parts = []
@@ -221,6 +241,11 @@ class StatusBar(Widget):
             if len(missing_file_names) > 5:
                 names += f" +{len(missing_file_names) - 5} more"
             file_detail_parts.append(f"[red]Missing:[/] {names}")
+        if broken_repos:
+            names = ", ".join(broken_repos[:5])
+            if len(broken_repos) > 5:
+                names += f" +{len(broken_repos) - 5} more"
+            file_detail_parts.append(f"[red]Broken repo:[/] {names}")
         file_details = " | ".join(file_detail_parts) if file_detail_parts else ""
 
         if worker.is_cancelled:

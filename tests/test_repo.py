@@ -2,7 +2,27 @@
 
 from pathlib import Path
 
-from tui.core.repo import MARKER_NAME, RepoSpec, read_marker, write_marker
+import pytest
+
+from tui.core.repo import MARKER_NAME, RepoSpec, classify, read_marker, write_marker
+
+
+@pytest.mark.parametrize("state,bucket", [
+    ("ok", "synced"), ("ahead", "synced"),
+    ("behind", "changed"), ("dirty", "changed"), ("diverged", "changed"),
+    ("missing", "missing"),
+    ("not_a_repo", "broken"), ("wrong_origin", "broken"), ("invalid_spec", "broken"),
+])
+def test_classify_buckets_every_status(state: str, bucket: str):
+    assert classify(state) == bucket
+
+
+def test_classify_covers_every_status_value():
+    """Every RepoStatus status() can return must have a bucket — a new status
+    added later must not silently fall into a default."""
+    from tui.core.repo import ALL_STATUSES
+    for state in ALL_STATUSES:
+        assert classify(state) in {"synced", "changed", "missing", "broken"}
 
 
 def test_read_marker_returns_none_without_marker(tmp_path: Path):

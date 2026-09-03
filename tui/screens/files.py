@@ -36,6 +36,25 @@ def _dir_deletions(source: Path, dest: Path) -> list[str]:
     return dir_diff(source, dest)[1]
 
 
+# repo_mod.classify() owns the RepoStatus -> bucket mapping (synced/changed/
+# missing/broken). These two dicts are display-only, mapping each bucket to
+# what this screen already renders for it — a display-status label sharing
+# a colour with the plain-file states below, and the list token — so the
+# bucket mapping itself is defined exactly once, in tui/core/repo.py.
+_BUCKET_TO_STATUS = {
+    "synced": "ok",
+    "changed": "modified",
+    "missing": "missing_system",
+    "broken": "missing_repo",
+}
+_BUCKET_TO_TOKEN = {
+    "synced": "OK",
+    "changed": "!!",
+    "missing": "--",
+    "broken": "??",
+}
+
+
 class FileScreen(Screen):
     """View and manage tracked config files."""
 
@@ -108,14 +127,7 @@ class FileScreen(Screen):
             spec = m.repo
             if spec is not None:
                 repo_state = repo_mod.status(sys_file, spec)
-                status = {
-                    "ok": "ok",
-                    "ahead": "ok",
-                    "missing": "missing_system",
-                    "not_a_repo": "missing_repo",
-                    "wrong_origin": "missing_repo",
-                    "invalid_spec": "missing_repo",
-                }.get(repo_state, "modified")
+                status = _BUCKET_TO_STATUS[repo_mod.classify(repo_state)]
             else:
                 repo_state = None
                 status = self._file_status(m.repo_path, sys_file)
@@ -190,16 +202,9 @@ class FileScreen(Screen):
         self._tree_cache[key] = (sig, h)
         return h
 
-    _REPO_TOKENS = {
-        "ok": "OK", "ahead": "OK",
-        "behind": "!!", "dirty": "!!", "diverged": "!!",
-        "missing": "--",
-        "not_a_repo": "??", "wrong_origin": "??", "invalid_spec": "??",
-    }
-
     @staticmethod
     def _repo_status_token(state: str) -> str:
-        return FileScreen._REPO_TOKENS.get(state, "??")
+        return _BUCKET_TO_TOKEN[repo_mod.classify(state)]
 
     @staticmethod
     def _repo_detail_lines(spec: RepoSpec, sys_path: Path) -> list[tuple[str, str]]:

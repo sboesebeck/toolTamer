@@ -111,6 +111,27 @@ def detect(system_path: Path) -> RepoSpec | None:
 
 RepoStatus = str  # one of the nine literals documented in the plan/spec
 
+ALL_STATUSES = (
+    "ok", "ahead", "behind", "dirty", "diverged",
+    "missing", "not_a_repo", "wrong_origin", "invalid_spec",
+)
+
+_BUCKETS = {
+    "ok": "synced", "ahead": "synced",
+    "behind": "changed", "dirty": "changed", "diverged": "changed",
+    "missing": "missing",
+    "not_a_repo": "broken", "wrong_origin": "broken", "invalid_spec": "broken",
+}
+
+
+def classify(state: RepoStatus) -> str:
+    """Bucket a repo status for display: synced | changed | missing | broken.
+
+    Both the file list and the status bar need this mapping, and they used to
+    encode it separately — which is how a synced repo entry ended up counted
+    as "changed" in the status bar. One definition, two consumers."""
+    return _BUCKETS.get(state, "broken")
+
 
 def _effective_branch(system_path: Path, spec: RepoSpec) -> str:
     if spec.branch:

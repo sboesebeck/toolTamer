@@ -17,6 +17,7 @@ removal — the `@work` decorator preserves the original method via
 exercised synchronously and deterministically.
 """
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -24,6 +25,7 @@ import pytest
 from textual.widgets import Label
 
 from tui.core.config import TTConfig
+from tui.core.repo import RepoSpec, write_marker
 from tui.core.system import SystemInfo
 from tui.widgets.status_bar import StatusBar
 
@@ -119,6 +121,147 @@ def _pkg_count_text(status_bar: StatusBar) -> str:
     if not texts:
         raise AssertionError("pkg-count update was never sent")
     return texts[0]
+
+
+def _file_count_text(status_bar: StatusBar) -> str:
+    """The text passed to the '#file-count' Label.update."""
+    target = status_bar.query_one("#file-count", Label).update
+    for call in status_bar.app.call_from_thread.call_args_list:
+        if len(call.args) == 2 and call.args[0] == target:
+            return str(call.args[1])
+    raise AssertionError("file-count update was never sent")
+
+
+def _file_details_text(status_bar: StatusBar) -> str:
+    """The text passed to the '#file-details' Label.update."""
+    target = status_bar.query_one("#file-details", Label).update
+    for call in status_bar.app.call_from_thread.call_args_list:
+        if len(call.args) == 2 and call.args[0] == target:
+            return str(call.args[1])
+    raise AssertionError("file-details update was never sent")
+
+
+def _run_git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _make_origin_repo(path: Path) -> Path:
+    """A local-path git repo used as 'the remote' — never a network URL, so
+    repo.status() (fetch=False, the status bar's only mode) never touches
+    the network."""
+    path.mkdir(parents=True)
+    _run_git(path, "init", "--quiet", "--initial-branch=main")
+    _run_git(path, "config", "user.email", "t@example.com")
+    _run_git(path, "config", "user.name", "Test")
+    (path / "README.md").write_text("hello\n")
+    _run_git(path, "add", "README.md")
+    _run_git(path, "commit", "--quiet", "-m", "init")
+    return path
+
+
+def _build_repo_entry_config(tmp_path: Path) -> tuple[Path, Path]:
+    """A tt config with one repo-tracked entry ('myrepo' -> '~/.myrepo'),
+    plus a fake $HOME that already holds a real local clone of that entry's
+    origin — same shape as _build_repo_entry_config in
+    tests/test_files_screen.py, kept local here since this file follows its
+    own fixture style."""
+    base = tmp_path / "toolTamer"
+    configs = base / "configs"
+    common = configs / "common"
+    common.mkdir(parents=True)
+    (common / "files").mkdir()
+    (common / "to_install.brew").write_text("git\n")
+    host = configs / "testhost"
+    host.mkdir(parents=True)
+    (host / "files").mkdir()
+    (host / "files.conf").write_text("")
+    (host / "includes.conf").write_text("")
+    (base / "tt.conf").write_text("")
+
+    origin = _make_origin_repo(tmp_path / "origin.git")
+
+    store_dir = common / "files" / "myrepo"
+    store_dir.mkdir()
+    write_marker(store_dir, RepoSpec(url=str(origin), branch="main"))
+    (common / "files.conf").write_text("myrepo;.myrepo\n")
+
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    clone_dir = fake_home / ".myrepo"
+    subprocess.run(
+        ["git", "clone", "--quiet", str(origin), str(clone_dir)],
+        check=True, capture_output=True,
+    )
+    _run_git(clone_dir, "config", "user.email", "t@example.com")
+    _run_git(clone_dir, "config", "user.name", "Test")
+
+    return base, fake_home
+
+
+def test_synced_repo_entry_is_not_counted_as_changed(tmp_path: Path, monkeypatch):
+    """Regression: the status bar compared tree hashes, so a repo entry whose
+    store side holds only .ttgit always looked modified."""
+    base, fake_home = _build_repo_entry_config(tmp_path)
+    monkeypatch.setattr(SystemInfo, "list_installed_packages", lambda self: [])
+    monkeypatch.setattr("socket.gethostname", lambda: "testhost")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    status_bar = _make_status_bar(base, monkeypatch)
+    monkeypatch.setattr(
+        "tui.widgets.status_bar.get_current_worker",
+        lambda: MagicMock(is_cancelled=False),
+    )
+
+    StatusBar._scan_status.__wrapped__(status_bar)
+
+    file_text = _file_count_text(status_bar)
+    assert "changed" not in file_text, file_text
+    assert "missing" not in file_text, file_text
+    assert "all synced" in file_text, file_text
+
+
+def test_dirty_repo_entry_is_counted_as_changed(tmp_path: Path, monkeypatch):
+    """A repo entry with uncommitted local changes IS reported as changed —
+    the fix must not silently treat every repo entry as synced."""
+    base, fake_home = _build_repo_entry_config(tmp_path)
+    (fake_home / ".myrepo" / "README.md").write_text("edited locally\n")
+    monkeypatch.setattr(SystemInfo, "list_installed_packages", lambda self: [])
+    monkeypatch.setattr("socket.gethostname", lambda: "testhost")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    status_bar = _make_status_bar(base, monkeypatch)
+    monkeypatch.setattr(
+        "tui.widgets.status_bar.get_current_worker",
+        lambda: MagicMock(is_cancelled=False),
+    )
+
+    StatusBar._scan_status.__wrapped__(status_bar)
+
+    file_text = _file_count_text(status_bar)
+    assert "1 changed" in file_text, file_text
+    assert ".myrepo" in _file_details_text(status_bar)
+
+
+def test_broken_repo_entry_is_counted_as_broken_not_missing(tmp_path: Path, monkeypatch):
+    """not_a_repo / wrong_origin / invalid_spec must land in their own
+    'broken' bucket, not be folded into 'missing' — a repo whose origin no
+    longer matches its marker is a different problem than one never
+    cloned."""
+    base, fake_home = _build_repo_entry_config(tmp_path)
+    monkeypatch.setattr("tui.widgets.status_bar.repo_mod.status", lambda *a, **k: "wrong_origin")
+    monkeypatch.setattr(SystemInfo, "list_installed_packages", lambda self: [])
+    monkeypatch.setattr("socket.gethostname", lambda: "testhost")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    status_bar = _make_status_bar(base, monkeypatch)
+    monkeypatch.setattr(
+        "tui.widgets.status_bar.get_current_worker",
+        lambda: MagicMock(is_cancelled=False),
+    )
+
+    StatusBar._scan_status.__wrapped__(status_bar)
+
+    file_text = _file_count_text(status_bar)
+    assert "1 broken" in file_text, file_text
+    assert "missing" not in file_text, file_text
+    assert "Broken repo" in _file_details_text(status_bar)
 
 
 def test_extra_count_excludes_dependency_installed_packages(
