@@ -284,3 +284,65 @@ def test_do_apply_never_deletes_a_repo_target(tmp_config: Path, tmp_path: Path, 
 
     assert (target / "work_in_progress.lua").read_text() == "-- precious\n"
     assert (target / ".git").exists()
+
+
+from tui.core.repo import read_marker
+
+
+def test_save_repo_marker_picks_up_new_origin(tmp_config: Path, tmp_path: Path, monkeypatch):
+    """Ruling R3: local filesystem paths stand in for both the old and new
+    origin — never git@.../ssh://... — so detect()'s `git remote get-url`
+    stays fully offline."""
+    home = tmp_path / "home"
+    target = home / ".config" / "nvim"
+    target.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", "--initial-branch=develop"],
+                   cwd=target, check=True, capture_output=True)
+    _run_git(target, "config", "user.email", "t@example.com")
+    _run_git(target, "config", "user.name", "Test")
+    # detect() asks `git rev-parse --abbrev-ref HEAD`, which fails on an
+    # unborn branch — an empty repo has no established branch to report.
+    # A real tracked repo always has at least one commit, so give it one.
+    _run_git(target, "commit", "--quiet", "--allow-empty", "-m", "init")
+    new_origin = str(tmp_path / "new.git")
+    subprocess.run(["git", "remote", "add", "origin", new_origin],
+                   cwd=target, check=True, capture_output=True)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    old_origin = str(tmp_path / "old.git")
+    (store / ".ttgit").write_text(f"url = {old_origin}\nbranch = main\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+    message = screen._save_repo_marker("testhost", "nvim", ".config/nvim")
+
+    spec = read_marker(store)
+    assert spec.url == new_origin
+    assert spec.branch == "develop"
+    assert "new.git" in message
+
+
+def test_save_repo_marker_refuses_when_target_is_not_a_repo(tmp_config: Path, tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".config" / "nvim").mkdir(parents=True)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    store.mkdir(parents=True)
+    old_origin = str(tmp_path / "old.git")
+    (store / ".ttgit").write_text(f"url = {old_origin}\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+    screen = FileScreen.__new__(FileScreen)
+    screen._tt_config = TTConfig(tmp_config)
+    message = screen._save_repo_marker("testhost", "nvim", ".config/nvim")
+
+    assert read_marker(store).url == old_origin
+    assert "not a git repository" in message

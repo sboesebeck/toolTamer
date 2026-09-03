@@ -572,6 +572,29 @@ class FileScreen(Screen):
         self._refresh_files()
         self._show_diff(config, stored, target)
 
+    def _save_repo_marker(self, config: str, stored: str, target: str) -> str:
+        """System -> TT for a repo entry: refresh url/branch in .ttgit.
+
+        Never captures content and never removes the marker."""
+        from tui.core.config import _resolve_effective_target
+        from tui.core.repo import detect, read_marker, write_marker
+
+        store = self._tt_config.configs_dir / config / "files" / stored
+        sys_path = Path.home() / _resolve_effective_target(stored, target)
+        current = read_marker(store)
+        if current is None:
+            return "Not a repo entry."
+        found = detect(sys_path)
+        if found is None:
+            return f"~/{_resolve_effective_target(stored, target)} is not a git repository root — marker unchanged."
+        if found.url == current.url and found.branch == current.branch:
+            return "Marker already matches the system — nothing to save."
+        write_marker(store, RepoSpec(url=found.url, branch=found.branch, force=current.force))
+        return (
+            f"Updated .ttgit: url {found.url}"
+            + (f", branch {found.branch}" if found.branch else "")
+        )
+
     def action_save_change(self) -> None:
         """Unified save (merges the old 'capture' and 'override local').
 
@@ -589,6 +612,14 @@ class FileScreen(Screen):
         sys_file = Path.home() / eff_target
         repo_file = self._tt_config.configs_dir / config / "files" / stored
         host = self._system.hostname
+
+        from tui.core.repo import read_marker as _read_marker
+        if _read_marker(repo_file) is not None:
+            log = self.query_one("#file-diff", RichLog)
+            log.clear()
+            log.write(Text(self._save_repo_marker(config, stored, target), style="cyan"))
+            self._refresh_files()
+            return
 
         if config == host:
             # Already host-local: nothing to choose, just capture the system state.
