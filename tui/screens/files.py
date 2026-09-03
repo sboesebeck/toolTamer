@@ -207,7 +207,9 @@ class FileScreen(Screen):
         return _BUCKET_TO_TOKEN[repo_mod.classify(state)]
 
     @staticmethod
-    def _repo_detail_lines(spec: RepoSpec, sys_path: Path) -> list[tuple[str, str]]:
+    def _repo_detail_lines(
+        spec: RepoSpec, sys_path: Path, store_path: Path | None = None
+    ) -> list[tuple[str, str]]:
         """Detail-pane content for a repo entry: the clone spec plus the
         current local state. No file diff — the store holds no content."""
         lines: list[tuple[str, str]] = [("", "")]
@@ -218,6 +220,28 @@ class FileScreen(Screen):
         if spec.force:
             lines.append(("  force  true — local changes are discarded on sync", "yellow"))
         lines.append(("", ""))
+
+        # Spec §5: a marker directory holding anything besides .ttgit — a
+        # leftover snapshot from before the conversion, say — has that content
+        # ignored by both engines. The ignoring was implemented; the "einmalig
+        # gemeldet" half was not, so the files sat there invisibly. The detail
+        # pane is where the user is already looking at this entry.
+        if store_path is not None:
+            from tui.core.config import iter_tree_files
+            extras = sorted(
+                rel for rel, _ in iter_tree_files(store_path)
+                if rel != repo_mod.MARKER_NAME
+            )
+            if extras:
+                lines.append((
+                    f"{len(extras)} file(s) stored beside .ttgit are ignored "
+                    f"— ToolTamer syncs this entry with git only:", "yellow",
+                ))
+                for rel in extras[:10]:
+                    lines.append((f"  {rel}", "dim"))
+                if len(extras) > 10:
+                    lines.append((f"  ... and {len(extras) - 10} more", "dim"))
+                lines.append(("", ""))
 
         if not spec.url:
             lines.append(("Entry is broken: .ttgit has no url. Sync skips it.", "bold red"))
@@ -321,7 +345,7 @@ class FileScreen(Screen):
         from tui.core.repo import read_marker
         spec = read_marker(repo_file)
         if spec is not None:
-            for text, style in self._repo_detail_lines(spec, sys_file):
+            for text, style in self._repo_detail_lines(spec, sys_file, repo_file):
                 self.app.call_from_thread(log.write, Text(text, style=style))
             return
 

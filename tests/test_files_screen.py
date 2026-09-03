@@ -955,3 +955,43 @@ async def test_apply_on_a_repo_entry_never_shows_the_deletion_dialog(tmp_path: P
 
     assert ConfirmDeletionsScreen.__name__ not in pushed, pushed
     assert applied == [("common", "myrepo", ".myrepo")]
+
+
+# --- I3 (spec §5): content besides .ttgit is ignored — and now said so -----
+
+
+def test_repo_detail_lines_report_content_ignored_beside_the_marker(tmp_path: Path):
+    """Spec §5: "Marker-Verzeichnis enthält außer .ttgit noch Inhalt →
+    .ttgit gewinnt, Rest wird ignoriert und einmalig gemeldet". The ignoring
+    was implemented; the reporting was implemented nowhere, so the leftover
+    files were invisible to the user."""
+    store = tmp_path / "store"
+    store.mkdir()
+    write_marker(store, RepoSpec(url="git@example.com:me/r.git", branch="main"))
+    (store / "leftover.lua").write_text("-- from before the conversion\n")
+    (store / "sub").mkdir()
+    (store / "sub" / "more.lua").write_text("-- also ignored\n")
+
+    lines = FileScreen._repo_detail_lines(
+        RepoSpec(url="git@example.com:me/r.git", branch="main"),
+        tmp_path / "nope",
+        store,
+    )
+    text = "\n".join(t for t, _ in lines)
+    assert "ignored" in text.lower()
+    assert "leftover.lua" in text
+    assert "sub/more.lua" in text
+
+
+def test_repo_detail_lines_say_nothing_when_only_the_marker_is_stored(tmp_path: Path):
+    store = tmp_path / "store"
+    store.mkdir()
+    write_marker(store, RepoSpec(url="git@example.com:me/r.git", branch="main"))
+
+    lines = FileScreen._repo_detail_lines(
+        RepoSpec(url="git@example.com:me/r.git", branch="main"),
+        tmp_path / "nope",
+        store,
+    )
+    text = "\n".join(t for t, _ in lines)
+    assert "ignored" not in text.lower()

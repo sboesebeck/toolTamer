@@ -357,3 +357,60 @@ def test_dir_fully_readable_rejects_a_missing_or_non_directory_path(tmp_path: Pa
     f = tmp_path / "file.txt"
     f.write_text("x\n")
     assert dir_fully_readable(f) is False
+
+
+# --- I3: a repo entry is not a directory snapshot -------------------------
+
+def _repo_entry_config(tmp_config: Path) -> Path:
+    """'.config/nvim' tracked as a repo entry in the host config."""
+    from tui.core.repo import write_marker
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("nvim;.config/nvim\n")
+    store = host / "files" / "nvim"
+    write_marker(store, RepoSpec(url="git@example.com:me/nvim.git", branch="main"))
+    return store
+
+
+def test_find_covering_dir_skips_repo_entries(tmp_config: Path):
+    """I3: find_covering_dir accepted any store path that is_dir(), and a
+    marker directory is one — so a repo entry looked like a directory
+    snapshot covering everything under it."""
+    cfg = TTConfig(tmp_config)
+    _repo_entry_config(tmp_config)
+
+    assert cfg.find_covering_dir(".config/nvim/init.lua", ["testhost"]) is None
+
+
+def test_find_covering_repo_finds_the_repo_entry(tmp_config: Path):
+    cfg = TTConfig(tmp_config)
+    _repo_entry_config(tmp_config)
+
+    covering = cfg.find_covering_repo(".config/nvim/init.lua", ["testhost"])
+    assert covering is not None
+    assert covering.effective_target == ".config/nvim"
+    assert covering.config == "testhost"
+
+
+def test_adding_a_file_inside_a_repo_entry_is_refused_and_says_why(
+    tmp_config: Path, tmp_path: Path
+):
+    """I3: add_path's regular-file branch wrote the file into the marker
+    directory and reported "updated the directory snapshot, no new entry".
+    Neither engine will ever sync that file — the store side of a repo entry
+    holds only .ttgit — so the user was told something untrue."""
+    cfg = TTConfig(tmp_config)
+    store = _repo_entry_config(tmp_config)
+
+    home = tmp_path / "home"
+    src = home / ".config" / "nvim" / "init.lua"
+    src.parent.mkdir(parents=True)
+    src.write_text("-- init\n")
+
+    report = cfg.add_path("testhost", src, home=home)
+
+    assert sorted(p.name for p in store.iterdir()) == [".ttgit"]
+    assert cfg.get_file_mappings("testhost") == [("nvim", ".config/nvim")]
+    text = " ".join(report)
+    assert "repo entry" in text
+    assert "snapshot" not in text

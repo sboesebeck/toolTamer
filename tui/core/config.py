@@ -330,21 +330,39 @@ class TTConfig:
         self.remove_file_mapping(config, stored, target)
         return self._delete_stored_if_unreferenced(config, stored)
 
-    def find_covering_dir(self, rel: str, configs) -> FileMapping | None:
-        """Find a tracked directory entry whose effective target contains
-        `rel`. Searches the given config names; the deepest (longest) match
-        wins. Returns None when no tracked directory covers the path."""
+    def _find_covering(self, rel: str, configs, want_repo: bool) -> FileMapping | None:
+        """Deepest tracked directory entry whose effective target contains
+        `rel`, restricted to repo entries (`want_repo`) or to plain directory
+        snapshots. Returns None when nothing covers the path."""
         best: FileMapping | None = None
         for cfg in configs:
             for stored, target in self.get_file_mappings(cfg):
                 repo = self.configs_dir / cfg / "files" / stored
                 if not repo.is_dir() or repo.is_symlink():
                     continue
+                if (read_marker(repo) is not None) != want_repo:
+                    continue
                 eff = _resolve_effective_target(stored, target)
                 if _path_within(rel, eff):
                     if best is None or len(eff) > len(best.effective_target):
                         best = FileMapping(stored, target, cfg, repo)
         return best
+
+    def find_covering_dir(self, rel: str, configs) -> FileMapping | None:
+        """Find a tracked *directory snapshot* whose effective target contains
+        `rel`. Searches the given config names; the deepest (longest) match
+        wins. Returns None when no tracked directory covers the path.
+
+        Repo entries are deliberately excluded: their store side is a marker
+        directory, not a snapshot, so writing a file into it would produce a
+        copy neither engine ever syncs. Use find_covering_repo for those."""
+        return self._find_covering(rel, configs, want_repo=False)
+
+    def find_covering_repo(self, rel: str, configs) -> FileMapping | None:
+        """Find a tracked *repo entry* whose effective target contains `rel`.
+        ToolTamer tracks such a repository as a whole; individual files inside
+        it are not separately trackable."""
+        return self._find_covering(rel, configs, want_repo=True)
 
     def add_path(
         self,
@@ -411,6 +429,17 @@ class TTConfig:
             return report
 
         # Regular file
+        covering_repo = self.find_covering_repo(rel, scope)
+        if covering_repo is not None:
+            # I3: a repo entry's store side holds only .ttgit. Writing the
+            # file into it produced a copy that neither engine ever syncs,
+            # while telling the user the directory snapshot had been updated.
+            return [
+                f"~/{rel} lies inside repo entry ~/{covering_repo.effective_target} "
+                f"('{covering_repo.config}') — ToolTamer tracks the repository, "
+                f"not individual files inside it; nothing added"
+            ]
+
         covering = self.find_covering_dir(rel, scope)
         if covering is not None:
             inner = rel[len(covering.effective_target.rstrip("/")) + 1:]
