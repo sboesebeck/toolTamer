@@ -275,6 +275,128 @@ function ttGitTopLevel() {
   echo "$resolved_top"
 }
 
+# ttGitClone <url> <branch> <target>
+function ttGitClone() {
+  local url="$1" branch="$2" target="$3"
+  mkdir -p "$(dirname "$target")"
+  if [ -n "$branch" ]; then
+    git clone --quiet --branch "$branch" "$url" "$target" 2>/dev/null
+  else
+    git clone --quiet "$url" "$target" 2>/dev/null
+  fi
+}
+
+# Sync a repo entry from the TT store to the system (TT -> system).
+# Never destroys local work unless the marker sets force = true.
+function syncRepoToSystem() {
+  local gitdir="$1" sysdir="$2"
+  local url branch force
+  url=$(readRepoSpec "$gitdir" url)
+  branch=$(readRepoSpec "$gitdir" branch)
+  force=$(readRepoSpec "$gitdir" force)
+
+  logn "Comparing repo ${GN}$sysdir${RESET} <-> ${BL}${gitdir##$BASE/configs/}${RESET}....."
+
+  if [ -z "$url" ]; then
+    log "${RD}broken .ttgit${RESET} (no url)"
+    note "Broken repo entry" "$sysdir (.ttgit has no url)"
+    return 1
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    log "${YL}git not installed${RESET}"
+    note "Skipped repo (no git)" "$sysdir"
+    return 1
+  fi
+
+  if [ ! -e "$sysdir" ]; then
+    log "${YL}not cloned yet${RESET} - cloning"
+    if ttGitClone "$url" "$branch" "$sysdir"; then
+      note "Cloned repo" "$sysdir ($url)"
+    else
+      err "Clone of $url failed"
+      note "Failed repo clone" "$sysdir ($url)"
+    fi
+    return
+  fi
+
+  if [ -z "$(ttGitTopLevel "$sysdir")" ]; then
+    log "${YL}not a git repo${RESET} - backing up, cloning"
+    rm -rf "$sysdir.ttbak"
+    mv "$sysdir" "$sysdir.ttbak"
+    if ttGitClone "$url" "$branch" "$sysdir"; then
+      note "Replaced non-repo with clone" "$sysdir (backup: $sysdir.ttbak)"
+    else
+      err "Clone of $url failed"
+      note "Failed repo clone" "$sysdir (backup: $sysdir.ttbak)"
+    fi
+    return
+  fi
+
+  local origin
+  origin=$(git -C "$sysdir" remote get-url origin 2>/dev/null)
+  if [ "$origin" != "$url" ]; then
+    log "${RD}origin mismatch${RESET} ($origin) - skipped"
+    warn "$sysdir tracks $origin but ToolTamer expects $url"
+    note "Skipped repo (origin mismatch)" "$sysdir"
+    return 1
+  fi
+
+  if ! git -C "$sysdir" fetch --quiet origin 2>/dev/null; then
+    log "${YL}remote unreachable${RESET}"
+    note "Repo unreachable" "$sysdir ($url)"
+    return 1
+  fi
+
+  if [ -z "$branch" ]; then
+    branch=$(git -C "$sysdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  fi
+
+  local dirty=0
+  if [ -n "$(git -C "$sysdir" status --porcelain 2>/dev/null)" ]; then
+    dirty=1
+  fi
+
+  local counts ahead behind
+  counts=$(git -C "$sysdir" rev-list --left-right --count "HEAD...origin/$branch" 2>/dev/null)
+  ahead=$(echo "$counts" | awk '{print $1+0}')
+  behind=$(echo "$counts" | awk '{print $2+0}')
+
+  if [ "$dirty" -eq 1 ] || { [ "$ahead" -gt 0 ] && [ "$behind" -gt 0 ]; }; then
+    if [ "$force" != "true" ]; then
+      log "${YL}local changes${RESET} - skipped"
+      warn "$sysdir has local changes - not touched (set force = true in .ttgit to override)"
+      note "Skipped repo (local changes)" "$sysdir"
+      return 1
+    fi
+    log "${YL}local changes${RESET} - resetting (force)"
+    if git -C "$sysdir" reset --hard "origin/$branch" >/dev/null 2>&1 &&
+      git -C "$sysdir" clean -fd >/dev/null 2>&1; then
+      note "Reset repo to remote" "$sysdir (origin/$branch)"
+    else
+      err "Reset of $sysdir failed"
+      note "Failed repo reset" "$sysdir"
+    fi
+    return
+  fi
+
+  if [ "$behind" -gt 0 ]; then
+    log "${YL}behind by $behind${RESET} - pulling"
+    if git -C "$sysdir" pull --quiet --ff-only >/dev/null 2>&1; then
+      note "Updated repo" "$sysdir"
+    else
+      err "Pull of $sysdir failed"
+      note "Failed repo pull" "$sysdir"
+    fi
+    return
+  fi
+
+  if [ "$ahead" -gt 0 ]; then
+    log "${GN}Ok${RESET} ($ahead local commit(s) not pushed)"
+    return
+  fi
+  log "${GN}Ok${RESET}"
+}
+
 function getInstalledPackages() {
   logn "Preparing list of software for $HOST..."
   for c in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do

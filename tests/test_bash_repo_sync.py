@@ -136,3 +136,144 @@ def test_tt_git_top_level_empty_for_plain_directory(tmp_path: Path):
     plain.mkdir()
     result = run_bash(f'ttGitTopLevel "{plain}"', tmp_path)
     assert result.stdout.strip() == ""
+
+
+
+
+def _summary(tmp_path: Path) -> str:
+    f = tmp_path / "tt-tmp" / "summary"
+    return f.read_text() if f.exists() else ""
+
+
+def test_sync_repo_clones_when_target_missing(tmp_path: Path, origin_repo: Path):
+    store = tmp_path / "store"
+    make_marker(store, str(origin_repo))
+    target = tmp_path / "sys" / "nvim"
+
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert (target / "README.md").read_text() == "one\n"
+    assert "Cloned repo" in _summary(tmp_path)
+
+
+def test_sync_repo_backs_up_non_repo_then_clones(tmp_path: Path, origin_repo: Path):
+    store = tmp_path / "store"
+    make_marker(store, str(origin_repo))
+    target = tmp_path / "sys" / "nvim"
+    target.mkdir(parents=True)
+    (target / "old.txt").write_text("old\n")
+
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert (target / "README.md").is_file()
+    assert (tmp_path / "sys" / "nvim.ttbak" / "old.txt").read_text() == "old\n"
+
+
+def test_sync_repo_pulls_when_behind(tmp_path: Path, origin_repo: Path):
+    store = tmp_path / "store"
+    make_marker(store, str(origin_repo))
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(other)],
+                   check=True, capture_output=True)
+    _git(other, "config", "user.email", "t@example.com")
+    _git(other, "config", "user.name", "Test")
+    (other / "remote.txt").write_text("remote\n")
+    _git(other, "add", "remote.txt")
+    _git(other, "commit", "--quiet", "-m", "remote")
+    _git(other, "push", "--quiet", "origin", "main")
+
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert (target / "remote.txt").is_file()
+    assert "Updated repo" in _summary(tmp_path)
+
+
+def test_sync_repo_skips_dirty_worktree(tmp_path: Path, origin_repo: Path):
+    store = tmp_path / "store"
+    make_marker(store, str(origin_repo))
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+    (target / "README.md").write_text("my work\n")
+
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert (target / "README.md").read_text() == "my work\n"
+    assert "Skipped repo" in _summary(tmp_path)
+
+
+def test_sync_repo_resets_dirty_worktree_with_force(tmp_path: Path, origin_repo: Path):
+    store = tmp_path / "store"
+    make_marker(store, str(origin_repo), force=True)
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+    (target / "README.md").write_text("my work\n")
+    (target / "junk.txt").write_text("junk\n")
+
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert (target / "README.md").read_text() == "one\n"
+    assert not (target / "junk.txt").exists()
+    assert "Reset repo" in _summary(tmp_path)
+
+
+def test_sync_repo_skips_on_origin_mismatch(tmp_path: Path, origin_repo: Path):
+    store = tmp_path / "store"
+    make_marker(store, "git@example.com:someone/else.git")
+    target = tmp_path / "sys" / "nvim"
+    subprocess.run(["git", "clone", "--quiet", str(origin_repo), str(target)],
+                   check=True, capture_output=True)
+
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert "origin" in _summary(tmp_path)
+    assert (target / "README.md").read_text() == "one\n"
+
+
+def test_sync_repo_reports_marker_without_url(tmp_path: Path):
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / ".ttgit").write_text("branch = main\n")
+    target = tmp_path / "sys" / "nvim"
+
+    run_bash(f'syncRepoToSystem "{store}" "{target}"', tmp_path)
+
+    assert "Broken repo entry" in _summary(tmp_path)
+    assert not target.exists()
+
+
+def test_sync_file_routes_repo_entries_away_from_mirror(tmp_path: Path, origin_repo: Path):
+    """syncFile must not call syncDirToSystem for a repo entry."""
+    store = tmp_path / "store"
+    make_marker(store, str(origin_repo))
+    target = tmp_path / "sys" / "nvim"
+
+    tt = REPO_ROOT / "bin" / "tt"
+    tt_tmp = tmp_path / "tt-tmp"
+    tt_tmp.mkdir(parents=True, exist_ok=True)
+
+    lines = tt.read_text().splitlines()
+    start = next(i for i, l in enumerate(lines) if l.startswith("function syncFile()"))
+    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+    sync_file_src = "\n".join(lines[start:end + 1]) + "\n"
+    sync_file_path = tmp_path / "sync_file.sh"
+    sync_file_path.write_text(sync_file_src)
+
+    script = (
+        f'source "{INCLUDE_SH}" >/dev/null 2>&1\n'
+        f'trap - EXIT QUIT TERM\n'
+        f'export BASE="{tmp_path}/base/"\n'
+        f'export TMP="{tt_tmp}"\n'
+        f'export HOST="testhost"\n'
+        f'source "{sync_file_path}"\n'
+        f'syncFile "{target}" "{store}"\n'
+    )
+    subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    assert (target / "README.md").is_file()
+    assert (target / ".git").exists()

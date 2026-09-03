@@ -280,6 +280,11 @@ function syncFile() {
   fi
 
   if [ -d "$gitfile" ]; then
+    if isRepoEntry "$gitfile"; then
+      # Tracked git repo: clone/pull, never mirror
+      syncRepoToSystem "$gitfile" "$dotfile"
+      return
+    fi
     # Tracked directory: full mirror TT -> system including deletions
     syncDirToSystem "$gitfile" "$dotfile"
     return
