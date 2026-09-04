@@ -157,6 +157,19 @@ class TTConfig:
             if d.is_dir() and not d.is_symlink()
         )
 
+    def rename_config(self, old: str, new: str) -> None:
+        """Move configs/<old> to configs/<new>. Used when a machine gets a
+        new machine id: its host config moves with it, so git sees a plain
+        rename on the next commit. Other configs' includes.conf are not
+        rewritten — host configs are practically never included."""
+        src = self.configs_dir / old
+        dst = self.configs_dir / new
+        if not src.is_dir():
+            raise FileNotFoundError(f"no config named {old!r}")
+        if dst.exists() or dst.is_symlink():
+            raise FileExistsError(f"config {new!r} already exists")
+        src.rename(dst)
+
     def get_includes(self, config: str) -> list[str]:
         inc_file = self.configs_dir / config / "includes.conf"
         if not inc_file.exists():

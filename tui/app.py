@@ -1,12 +1,10 @@
 """ToolTamer TUI - main application."""
 
-import os
-from pathlib import Path
 
 from textual.app import App
 
 from tui.core.config import TTConfig
-from tui.core.system import SystemInfo
+from tui.core.system import SystemInfo, default_base
 from tui.screens.dashboard import DashboardScreen
 
 
@@ -19,9 +17,9 @@ class ToolTamerApp(App):
 
     def __init__(self):
         super().__init__()
-        base = Path(os.environ.get("TT_BASE", str(Path.home() / ".config" / "toolTamer")))
+        base = default_base()
         self._tt_config = TTConfig(base)
-        self._system = SystemInfo()
+        self._system = SystemInfo(base)
 
     def on_mount(self) -> None:
         self.push_screen(DashboardScreen(self._tt_config, self._system))

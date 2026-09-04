@@ -34,10 +34,17 @@ class StatusBar(Widget):
             system, default_cache_path(tt_config.base)
         )
 
+    def _host_label(self) -> str:
+        # The config name is what matters; the live hostname is appended
+        # only when machine-id overrides it, so a stale pin stays visible.
+        host = self._system.hostname
+        real = self._system.real_hostname
+        return host if real == host else f"{host} ({real})"
+
     def compose(self) -> ComposeResult:
         with Horizontal():
             yield Label("Host    ", classes="label-key")
-            yield Label(self._system.hostname, classes="label-value", id="host-value")
+            yield Label(self._host_label(), classes="label-value", id="host-value")
         with Horizontal():
             yield Label("OS      ", classes="label-key")
             yield Label(

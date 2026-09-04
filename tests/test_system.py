@@ -240,3 +240,28 @@ def test_get_required_by_timeout_returns_empty_list(monkeypatch):
     monkeypatch.setattr(subprocess, "run", timeout)
 
     assert system.get_required_by("pkg") == []
+
+
+def test_hostname_defaults_to_socket_hostname(tmp_path):
+    with patch("socket.gethostname", return_value="laptop.vpn.example"):
+        info = SystemInfo(base=tmp_path)
+    assert info.hostname == "laptop.vpn.example"
+    assert info.real_hostname == "laptop.vpn.example"
+
+
+def test_machine_id_overrides_hostname(tmp_path):
+    (tmp_path / "machine-id").write_text("gandalf.home.local\n")
+    with patch("socket.gethostname", return_value="gandalf.fritz.box"):
+        info = SystemInfo(base=tmp_path)
+    assert info.hostname == "gandalf.home.local"
+    assert info.real_hostname == "gandalf.fritz.box"
+
+
+def test_base_defaults_to_tt_base_env(tmp_path, monkeypatch):
+    # app.py, fix_taps, cleanup_deps and warm_deps all derive their base
+    # from TT_BASE; SystemInfo() without an argument must agree with them,
+    # otherwise the TUI shows a different host than the config it uses.
+    monkeypatch.setenv("TT_BASE", str(tmp_path))
+    (tmp_path / "machine-id").write_text("pinned\n")
+    info = SystemInfo()
+    assert info.hostname == "pinned"

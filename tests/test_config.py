@@ -1,4 +1,7 @@
 from pathlib import Path
+
+import pytest
+
 from tui.core.config import TTConfig
 from tui.core.repo import RepoSpec
 
@@ -484,3 +487,27 @@ def test_adding_a_file_inside_an_unreadable_tracked_directory_refuses(
         assert cfg.get_file_mappings("testhost") == [("secretdir", ".config/secretdir")]
     finally:
         os.chmod(secret, 0o755)
+
+
+# --- rename_config -------------------------------------------------------
+
+
+def test_rename_config_moves_the_directory(tmp_config: Path):
+    cfg = TTConfig(tmp_config)
+    cfg.rename_config("testhost", "gandalf")
+    assert not (tmp_config / "configs" / "testhost").exists()
+    assert (tmp_config / "configs" / "gandalf" / "to_install.brew").read_text() == "ollama\npostgresql\n"
+    assert "gandalf" in cfg.list_configs()
+
+
+def test_rename_config_refuses_to_clobber_existing(tmp_config: Path):
+    cfg = TTConfig(tmp_config)
+    with pytest.raises(FileExistsError):
+        cfg.rename_config("testhost", "macosx")
+    assert (tmp_config / "configs" / "testhost").is_dir()
+
+
+def test_rename_config_refuses_missing_source(tmp_config: Path):
+    cfg = TTConfig(tmp_config)
+    with pytest.raises(FileNotFoundError):
+        cfg.rename_config("nope", "gandalf")

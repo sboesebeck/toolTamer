@@ -152,7 +152,7 @@ def _run_main(
     monkeypatch, tmp_config, required_by_map, argv, input_answer=None, dep_only=frozenset()
 ):
     system = _system(monkeypatch, required_by_map, dep_only=dep_only)
-    monkeypatch.setattr("tui.cleanup_deps.SystemInfo", lambda: system)
+    monkeypatch.setattr("tui.cleanup_deps.SystemInfo", lambda base=None: system)
     monkeypatch.setattr("tui.cleanup_deps.TTConfig", lambda base: TTConfig(tmp_config))
     # TT_BASE must point at the temp config too, not just TTConfig: main()
     # also derives the dependency cache path from it. Without this the

@@ -6,6 +6,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, ListItem, ListView
 
 from tui.core.config import TTConfig
+from tui.core.machine_id import write_machine_id
 from tui.core.system import SystemInfo
 from tui.widgets.config_tree import ConfigHierarchy
 from tui.widgets.status_bar import StatusBar
@@ -51,6 +52,7 @@ class DashboardScreen(Screen):
         ("t", "menu_action('taps')", "Taps"),
         ("d", "menu_action('files')", "Files"),
         ("l", "menu_action('local_install')", "Local Scripts"),
+        ("m", "menu_action('machine_id')", "Machine ID"),
         ("g", "menu_action('git')", "Git"),
         ("q", "quit", "Quit"),
     ]
@@ -91,6 +93,7 @@ class DashboardScreen(Screen):
                 items.extend([
                     MenuItem("D", "File Manager", "move, diff config files", "files"),
                     MenuItem("L", "Local Scripts", "manage local_install.sh", "local_install"),
+                    MenuItem("M", "Machine ID", "name this machine's config", "machine_id"),
                     MenuItem("G", "Git", "open lazygit", "git"),
                 ])
                 yield ListView(*items)
@@ -140,6 +143,16 @@ class DashboardScreen(Screen):
         elif action == "snapshot":
             from tui.screens.sync import SyncScreen
             self.app.push_screen(SyncScreen(self._tt_config, self._system, mode="snapshot"), callback=lambda _: self._on_sub_screen_closed())
+        elif action == "machine_id":
+            from tui.screens._machine_id import MachineIdScreen
+            self.app.push_screen(
+                MachineIdScreen(
+                    self._system.hostname,
+                    self._system.real_hostname,
+                    self._tt_config.list_configs(),
+                ),
+                callback=self._apply_machine_id,
+            )
         elif action == "refresh_index":
             import subprocess
             cmds = self._system.update_commands
@@ -161,6 +174,26 @@ class DashboardScreen(Screen):
             with self.app.suspend():
                 subprocess.run(["lazygit"], cwd=str(self._tt_config.base))
             self._redraw_after_suspend()
+
+    def _apply_machine_id(self, new_id: str | None) -> None:
+        if not new_id:
+            return
+        old_id = self._system.hostname
+        configs = self._tt_config.list_configs()
+        if old_id in configs and new_id not in configs:
+            # The machine keeps its config under the new name; if new_id
+            # already exists this is a deliberate switch to that config.
+            try:
+                self._tt_config.rename_config(old_id, new_id)
+            except OSError as e:
+                self.notify(f"Could not rename config: {e}", severity="error")
+                return
+            self.notify(f"Renamed config {old_id} → {new_id}")
+        write_machine_id(self._tt_config.base, new_id)
+        self._system.hostname = new_id
+        # Status bar and hierarchy both captured the old name in compose();
+        # rebuilding the screen is simpler than threading updates through.
+        self.app.switch_screen(DashboardScreen(self._tt_config, self._system))
 
     def action_quit(self) -> None:
         self.app.exit()
