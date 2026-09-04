@@ -553,6 +553,41 @@ function getInstalledPackages() {
   bash -c "$LIST" >$2
 }
 
+# --- machine id -------------------------------------------------------
+#
+# The hostname changes with the network (VPN, DHCP domain, mDNS suffix),
+# which used to switch host configs mid-week. $BASE/machine-id pins the
+# config name for this machine instead; it need not be a hostname at all.
+# The file is machine-local and kept out of the config repo. Parsing must
+# match tui/core/machine_id.py: first line, trimmed, empty means unset.
+
+function readMachineId() {
+  local f="$BASE/machine-id"
+  [ -r "$f" ] || return 0
+  head -n1 "$f" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+# The name every config lookup keys on: the pinned id, else the hostname.
+function resolveHost() {
+  local id
+  id=$(readMachineId)
+  echo "${id:-$(hostname)}"
+}
+
+# Pin $1 as this machine's id. The config dir is a git repo shared by all
+# machines, so the id is added to its .gitignore the first time - like
+# cache/ - rather than ending up committed from one machine.
+function writeMachineId() {
+  echo "$1" >"$BASE/machine-id"
+  local gi="$BASE/.gitignore"
+  if [ -d "$BASE/.git" ] && ! grep -qx 'machine-id' "$gi" 2>/dev/null; then
+    {
+      echo "# Which host config this machine uses (machine-specific)"
+      echo "machine-id"
+    } >>"$gi"
+  fi
+}
+
 # --- reverse-dependency cache (shared with the Python TUI) ------------
 #
 # $USES is one package-manager call per package and slow enough (~1.3s

@@ -25,14 +25,12 @@ Usage:
 """
 
 import argparse
-import os
 import sys
-from pathlib import Path
 
 from tui.core.config import TTConfig
 from tui.core.dep_cache import DependencyResolver, default_cache_path
 from tui.core.pkg_names import installed_index, is_installed, short_name
-from tui.core.system import SystemInfo
+from tui.core.system import SystemInfo, default_base
 
 
 def find_candidates(
@@ -141,9 +139,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    base = Path(os.environ.get("TT_BASE", str(Path.home() / ".config" / "toolTamer")))
+    base = default_base()
     tt_config = TTConfig(base)
-    system = SystemInfo()
+    system = SystemInfo(base)
     resolver = DependencyResolver(system, default_cache_path(base))
     if args.rescan:
         resolver.invalidate()

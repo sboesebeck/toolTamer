@@ -100,7 +100,7 @@ def test_returns_empty_when_nothing_to_fix(tmp_config: Path, monkeypatch):
 
 def _run_main(monkeypatch, tmp_config, full_names, argv, input_answer=None):
     system = _system(monkeypatch, full_names)
-    monkeypatch.setattr("tui.fix_taps.SystemInfo", lambda: system)
+    monkeypatch.setattr("tui.fix_taps.SystemInfo", lambda base=None: system)
     monkeypatch.setattr("tui.fix_taps.TTConfig", lambda base: TTConfig(tmp_config))
     monkeypatch.setenv("TT_BASE", str(tmp_config))
     if input_answer is not None:

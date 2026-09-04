@@ -22,13 +22,11 @@ Usage:
 """
 
 import argparse
-import os
 import sys
-from pathlib import Path
 
 from tui.core.config import TTConfig
 from tui.core.pkg_names import installed_index, is_installed
-from tui.core.system import SystemInfo
+from tui.core.system import SystemInfo, default_base
 
 
 def find_short_tap_names(
@@ -85,9 +83,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    base = Path(os.environ.get("TT_BASE", str(Path.home() / ".config" / "toolTamer")))
+    base = default_base()
     tt_config = TTConfig(base)
-    system = SystemInfo()
+    system = SystemInfo(base)
 
     found = find_short_tap_names(tt_config, system)
     if not found:

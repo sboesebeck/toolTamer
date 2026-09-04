@@ -6,6 +6,7 @@
 - `tui/` is the Python/Textual half: the interactive TUI plus the helper tools (`tui/cleanup_deps.py`, `tui/fix_taps.py`, `tui/warm_deps.py`). Core logic in `tui/core/`, screens in `tui/screens/`, widgets in `tui/widgets/`.
 - `tests/` holds the pytest suite covering the Python half.
 - Configuration data never lives in this repo: scripts expect host-specific directories under `~/.config/toolTamer/configs/` (override with `TT_BASE`).
+- The host config is chosen by `$BASE/machine-id` (machine-local, gitignored), falling back to the hostname. `bin/tt` writes it (`writeMachineId` in `include.sh`), the Python side only reads it (`tui/core/machine_id.py`); `SystemInfo.hostname` is that effective name, `SystemInfo.real_hostname` what the network says. Keep the two parsers in sync.
 - `README.md` documents onboarding; keep contributor-facing nuggets there and cross-reference this guide when updating flows.
 
 ## Build, Test, and Development Commands

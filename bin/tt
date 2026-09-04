@@ -700,8 +700,13 @@ echo " "
 
 checkSystem
 
-HOST="$(hostname)"
-log "Trying to tame all tools in all your systems. This is $BL$HOST$RESET - OS is $BL$OS_TYPE$RESET and the installer used here is $BL$INSTALLER$RESET"
+HOST="$(resolveHost)"
+REAL_HOST="$(hostname)"
+if [ "$HOST" = "$REAL_HOST" ]; then
+  log "Trying to tame all tools in all your systems. This is $BL$HOST$RESET - OS is $BL$OS_TYPE$RESET and the installer used here is $BL$INSTALLER$RESET"
+else
+  log "Trying to tame all tools in all your systems. This is $BL$HOST$RESET (hostname: $REAL_HOST) - OS is $BL$OS_TYPE$RESET and the installer used here is $BL$INSTALLER$RESET"
+fi
 
 if [ ! -e $BASE ]; then
   log "No config - enter gitlab url to checkout config dir - ctrl-c to abort...(empty for no clone)"
@@ -766,6 +771,13 @@ fi
 
 if [ -e $BASE/configs/$HOST ]; then
   log "There is a config for this machine available"
+  if [ -z "$(readMachineId)" ]; then
+    # Pin now, while the network-given name still resolves. Follow a
+    # symlink so hand-made hostname aliases collapse onto the real dir.
+    HOST=$(basename "$(cd "$BASE/configs/$HOST" && pwd -P)")
+    writeMachineId "$HOST"
+    log "Pinned machine id to $BL$HOST$RESET - edit $BASE/machine-id to change it"
+  fi
 else
   log "No config - press enter to create a new one, ctrl-c to abort..."
   read
@@ -778,6 +790,7 @@ else
   fi
 
   seed_default_config_files "$HOST"
+  writeMachineId "$HOST"
   log "done"
 
   echo "Configuration for $HOST created. But this is only a start - please have a closer look at $BASE/config/$HOST" | lolcat

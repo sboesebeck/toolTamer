@@ -29,14 +29,13 @@ Usage:
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 from tui.core.config import TTConfig
 from tui.core.dep_cache import DependencyResolver, default_cache_path
 from tui.core.pkg_names import short_name
-from tui.core.system import SystemInfo
+from tui.core.system import SystemInfo, default_base
 
 
 def _read_candidates(path: Path) -> list[str]:
@@ -113,11 +112,11 @@ def main(
     )
     args = parser.parse_args(argv)
 
-    base = Path(os.environ.get("TT_BASE", str(Path.home() / ".config" / "toolTamer")))
+    base = default_base()
     if tt_config is None:
         tt_config = TTConfig(base)
     if system is None:
-        system = SystemInfo()
+        system = SystemInfo(base)
 
     try:
         if args.installed:

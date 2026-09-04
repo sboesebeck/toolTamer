@@ -55,3 +55,26 @@ async def test_dashboard_has_config_hierarchy(app: ToolTamerApp):
     async with app.run_test() as pilot:
         hierarchy = app.query_one(ConfigHierarchy)
         assert hierarchy is not None
+
+
+@pytest.mark.asyncio
+async def test_dashboard_host_shows_real_hostname_when_pinned(tmp_config: Path, monkeypatch):
+    # machine-id pins the config name; the status bar must still reveal
+    # what the network currently calls the machine, otherwise a stale
+    # machine-id is invisible.
+    monkeypatch.setattr(SystemInfo, "get_required_by", lambda self, pkg: [])
+    (tmp_config / "machine-id").write_text("testhost\n")
+    with patch.dict(os.environ, {"TT_BASE": str(tmp_config)}):
+        with patch("socket.gethostname", return_value="testhost.vpn.example"):
+            app = ToolTamerApp()
+    async with app.run_test():
+        label = app.query_one("#host-value")
+        assert "testhost (testhost.vpn.example)" in str(label.render())
+
+
+@pytest.mark.asyncio
+async def test_dashboard_host_has_no_suffix_when_names_agree(app: ToolTamerApp):
+    async with app.run_test():
+        text = str(app.query_one("#host-value").render())
+        assert "testhost" in text
+        assert "testhost (" not in text

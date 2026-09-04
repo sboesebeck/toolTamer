@@ -1,17 +1,31 @@
 """Detect OS, package manager, and installed packages."""
 
+import os
 import platform
 import shutil
 import socket
 import subprocess
+from pathlib import Path
+
+from tui.core.machine_id import read_machine_id
+
+
+def default_base() -> Path:
+    """The ToolTamer base dir: $TT_BASE, else ~/.config/toolTamer."""
+    return Path(os.environ.get("TT_BASE", str(Path.home() / ".config" / "toolTamer")))
 
 
 class SystemInfo:
     """Detects and caches system information."""
 
-    def __init__(self):
+    def __init__(self, base: Path | None = None):
         self.os_type = platform.system()
-        self.hostname = socket.gethostname()
+        # What the network calls this machine right now; only shown, never
+        # used to pick a config.
+        self.real_hostname = socket.gethostname()
+        # The name every config lookup keys on. $BASE/machine-id pins it so
+        # a VPN or a different DHCP domain does not switch host configs.
+        self.hostname = read_machine_id(base or default_base()) or self.real_hostname
         self.installer = self._detect_installer()
 
     def _detect_installer(self) -> str:

@@ -175,9 +175,20 @@ When opening the Admin submenu, you will get the following options:
 
 ## Configuration 
 
-The Configuration of ToolTamer is located in `$HOME/.config/toolTamer` and relies on hostname of your machine.
+The Configuration of ToolTamer is located in `$HOME/.config/toolTamer`. Each machine
+uses one host config directory below `configs/`, chosen by its **machine id**.
 
-ToolTamer looks for a directory in it`s config directory named as the hostname from that machine (can also be a symbolic link). There should be several files: 
+The machine id lives in `$HOME/.config/toolTamer/machine-id` (one line, any name that
+works as a directory name). It is written automatically on the first run — with the
+hostname, or, if `configs/<hostname>` is a symlink, with the directory the link points
+to — and added to the config repo's `.gitignore`, since it is specific to that machine.
+Without the file, the hostname is used. Pinning the id this way keeps the same config
+when the hostname changes with the network (VPN, DHCP domain, `.local` vs. `.fritz.box`),
+which used to require symlinks between config directories. Edit the file to switch a
+machine to another config; when the id differs from the hostname, `tt` and the TUI show
+both.
+
+Inside the host config directory there should be several files: 
 
 - `to_install.brew` or `to_install.apt` or `to_install.pacman`: List of packages for the machine to be installed, depending on package manager. 
 - `includes.conf`: ToolTamer supports an easy hierachy, you can define hostnames / directories to include into your config. 
@@ -187,7 +198,8 @@ ToolTamer looks for a directory in it`s config directory named as the hostname f
 
 There is also a generated `cache/` directory next to `configs/`. It holds
 machine-local dependency data to keep repeated runs fast and should **not** be
-committed — add `cache/` to your config repo's `.gitignore`.
+committed — add `cache/` to your config repo's `.gitignore` (`machine-id` is added
+there automatically).
 
 There is one special directory called `common`. This contains files / configurations that are included by all other configurations.
 in common there might be all files listed above, or just one of them. Depending on your setup 
