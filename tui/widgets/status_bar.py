@@ -41,6 +41,17 @@ class StatusBar(Widget):
         real = self._system.real_hostname
         return host if real == host else f"{host} ({real})"
 
+    def _chain_label(self) -> str:
+        # An include without a config dir is dropped silently everywhere
+        # else (resolve_chain passes names through), so this is the one
+        # place a typo or a renamed host shows up.
+        host = self._system.hostname
+        missing = set(self._tt_config.missing_includes(host))
+        return " → ".join(
+            f"[red]{cfg} (missing)[/]" if cfg in missing else cfg
+            for cfg in self._tt_config.resolve_chain(host)
+        )
+
     def compose(self) -> ComposeResult:
         with Horizontal():
             yield Label("Host    ", classes="label-key")
@@ -53,11 +64,7 @@ class StatusBar(Widget):
             )
         with Horizontal():
             yield Label("Configs ", classes="label-key")
-            chain = self._tt_config.resolve_chain(self._system.hostname)
-            yield Label(
-                " → ".join(chain),
-                classes="label-value",
-            )
+            yield Label(self._chain_label(), classes="label-value", id="configs-value")
         with Horizontal():
             yield Label("Pkgs    ", classes="label-key")
             yield Label("[dim]scanning...[/]", classes="label-value", id="pkg-count")

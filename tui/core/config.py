@@ -157,11 +157,17 @@ class TTConfig:
             if d.is_dir() and not d.is_symlink()
         )
 
-    def rename_config(self, old: str, new: str) -> None:
-        """Move configs/<old> to configs/<new>. Used when a machine gets a
+    def rename_config(self, old: str, new: str) -> list[str]:
+        """Move configs/<old> to configs/<new> and repoint every other
+        config's includes.conf that named <old>. Used when a machine gets a
         new machine id: its host config moves with it, so git sees a plain
-        rename on the next commit. Other configs' includes.conf are not
-        rewritten — host configs are practically never included."""
+        rename on the next commit. Returns the configs whose includes were
+        rewritten.
+
+        Host configs *are* included elsewhere in practice (one laptop
+        inherits from the desktop), and a dangling include fails silently —
+        resolve_chain passes unknown names through — so leaving those
+        stale would quietly shrink the other machine's config."""
         src = self.configs_dir / old
         dst = self.configs_dir / new
         if not src.is_dir():
@@ -169,6 +175,30 @@ class TTConfig:
         if dst.exists() or dst.is_symlink():
             raise FileExistsError(f"config {new!r} already exists")
         src.rename(dst)
+        updated = []
+        for cfg in self.list_configs():
+            inc_file = self.configs_dir / cfg / "includes.conf"
+            if not inc_file.exists():
+                continue
+            lines = inc_file.read_text().splitlines(keepends=True)
+            # Whole-line match only: "macosx" must not touch "macosx_old".
+            rewritten = [
+                line.replace(old, new, 1) if line.strip() == old else line
+                for line in lines
+            ]
+            if rewritten != lines:
+                inc_file.write_text("".join(rewritten))
+                updated.append(cfg)
+        return updated
+
+    def missing_includes(self, config: str) -> list[str]:
+        """Entries of <config>'s includes.conf with no config dir behind
+        them. Such an include is silently dropped by everything else, so
+        the caller can at least show it."""
+        return [
+            inc for inc in self.get_includes(config)
+            if not (self.configs_dir / inc).is_dir()
+        ]
 
     def get_includes(self, config: str) -> list[str]:
         inc_file = self.configs_dir / config / "includes.conf"

@@ -553,6 +553,18 @@ function getInstalledPackages() {
   bash -c "$LIST" >$2
 }
 
+# Warn about includes.conf entries with no config dir behind them. The
+# sync loops just iterate the names, so a typo or a renamed host would
+# otherwise cost this machine packages and files without a word.
+function checkIncludes() {
+  local inc="$BASE/configs/$HOST/includes.conf"
+  [ -r "$inc" ] || return 0
+  local i
+  for i in $(grep -v '^[[:space:]]*#' "$inc"); do
+    [ -d "$BASE/configs/$i" ] || warn "includes.conf of $HOST references missing config ${BL}$i${RESET} - it is ignored"
+  done
+}
+
 # --- machine id -------------------------------------------------------
 #
 # The hostname changes with the network (VPN, DHCP domain, mDNS suffix),

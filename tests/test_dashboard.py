@@ -169,3 +169,40 @@ async def test_machine_id_must_be_a_plain_directory_name(tmp_config: Path, monke
         # rejected: dialog stays open, nothing written
         assert isinstance(app.screen, MachineIdScreen)
         assert not (tmp_config / "machine-id").exists()
+
+
+# --- dangling includes ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_bar_flags_missing_include_in_chain(tmp_config: Path, monkeypatch):
+    (tmp_config / "configs" / "testhost" / "includes.conf").write_text("macosx\ngone\n")
+    app = _app_in_repo(tmp_config, monkeypatch)
+    async with app.run_test():
+        text = str(app.screen.query_one("#configs-value").render())
+        assert "gone (missing)" in text
+        assert "macosx" in text
+
+
+@pytest.mark.asyncio
+async def test_status_bar_chain_is_plain_when_complete(app: ToolTamerApp):
+    async with app.run_test():
+        assert "missing" not in str(app.screen.query_one("#configs-value").render())
+
+
+@pytest.mark.asyncio
+async def test_machine_id_hint_names_configs_whose_includes_move(tmp_config: Path, monkeypatch):
+    other = tmp_config / "configs" / "otherhost"
+    other.mkdir()
+    (other / "includes.conf").write_text("testhost\n")
+    app = _app_in_repo(tmp_config, monkeypatch)
+    async with app.run_test() as pilot:
+        await pilot.press("m")
+        await pilot.pause()
+        app.screen.query_one("#machine-id-input", Input).value = "gandalf"
+        await pilot.pause()
+        hint = str(app.screen.query_one("#machine-id-hint").render())
+        assert "otherhost" in hint
+        await pilot.press("enter")
+        await pilot.pause()
+        assert (other / "includes.conf").read_text() == "gandalf\n"

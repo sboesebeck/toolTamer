@@ -186,7 +186,9 @@ Without the file, the hostname is used. Pinning the id this way keeps the same c
 when the hostname changes with the network (VPN, DHCP domain, `.local` vs. `.fritz.box`),
 which used to require symlinks between config directories. To rename it, use
 **M — Machine ID** in the TUI's main menu (the host config directory moves along with the
-name, or you switch to an existing config) or simply edit the file. When the id differs
+name and other configs' `includes.conf` entries are repointed, or you switch to an existing
+config) or simply edit the file. An `includes.conf` entry without a config behind it is
+flagged in the TUI status bar and by `tt` at startup. When the id differs
 from the hostname, `tt` and the TUI show both.
 
 Inside the host config directory there should be several files: 

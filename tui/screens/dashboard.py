@@ -150,6 +150,7 @@ class DashboardScreen(Screen):
                     self._system.hostname,
                     self._system.real_hostname,
                     self._tt_config.list_configs(),
+                    includers=self._tt_config.get_children(self._system.hostname),
                 ),
                 callback=self._apply_machine_id,
             )
@@ -184,11 +185,14 @@ class DashboardScreen(Screen):
             # The machine keeps its config under the new name; if new_id
             # already exists this is a deliberate switch to that config.
             try:
-                self._tt_config.rename_config(old_id, new_id)
+                updated = self._tt_config.rename_config(old_id, new_id)
             except OSError as e:
                 self.notify(f"Could not rename config: {e}", severity="error")
                 return
-            self.notify(f"Renamed config {old_id} → {new_id}")
+            msg = f"Renamed config {old_id} → {new_id}"
+            if updated:
+                msg += f"; updated includes in {', '.join(updated)}"
+            self.notify(msg)
         write_machine_id(self._tt_config.base, new_id)
         self._system.hostname = new_id
         # Status bar and hierarchy both captured the old name in compose();
