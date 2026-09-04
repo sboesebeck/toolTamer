@@ -511,3 +511,48 @@ def test_rename_config_refuses_missing_source(tmp_config: Path):
     cfg = TTConfig(tmp_config)
     with pytest.raises(FileNotFoundError):
         cfg.rename_config("nope", "gandalf")
+
+
+def test_rename_config_rewrites_includes_in_other_configs(tmp_config: Path):
+    # tmp_config: testhost includes macosx. Add a second host that includes
+    # testhost, plus a comment and unrelated line that must survive.
+    other = tmp_config / "configs" / "otherhost"
+    other.mkdir()
+    (other / "includes.conf").write_text("# shared bits\nmacosx\ntesthost\n")
+    cfg = TTConfig(tmp_config)
+    updated = cfg.rename_config("testhost", "gandalf")
+    assert updated == ["otherhost"]
+    assert (other / "includes.conf").read_text() == "# shared bits\nmacosx\ngandalf\n"
+    assert cfg.get_includes("otherhost") == ["macosx", "gandalf"]
+
+
+def test_rename_config_leaves_unrelated_includes_alone(tmp_config: Path):
+    cfg = TTConfig(tmp_config)
+    before = (tmp_config / "configs" / "testhost" / "includes.conf").read_text()
+    updated = cfg.rename_config("macosx", "common_mac")
+    assert updated == ["testhost"]
+    # substring matches must not fire: "macosx" inside another name
+    other = tmp_config / "configs" / "otherhost"
+    other.mkdir()
+    (other / "includes.conf").write_text("macosx_old\n")
+    assert cfg.rename_config("common_mac", "macosx") == ["testhost"]
+    assert (other / "includes.conf").read_text() == "macosx_old\n"
+    assert (tmp_config / "configs" / "testhost" / "includes.conf").read_text() == before
+
+
+# --- missing_includes ----------------------------------------------------
+
+
+def test_missing_includes_empty_when_chain_is_complete(tmp_config: Path):
+    assert TTConfig(tmp_config).missing_includes("testhost") == []
+
+
+def test_missing_includes_names_dangling_entries(tmp_config: Path):
+    (tmp_config / "configs" / "testhost" / "includes.conf").write_text("macosx\ngone\n")
+    assert TTConfig(tmp_config).missing_includes("testhost") == ["gone"]
+
+
+def test_missing_includes_ignores_the_host_itself(tmp_config: Path):
+    # A host without a config dir yet is "missing" too, but that is the
+    # normal first-run state and not an includes.conf error.
+    assert TTConfig(tmp_config).missing_includes("brandnew") == []

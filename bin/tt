@@ -771,6 +771,7 @@ fi
 
 if [ -e $BASE/configs/$HOST ]; then
   log "There is a config for this machine available"
+  checkIncludes
   if [ -z "$(readMachineId)" ]; then
     # Pin now, while the network-given name still resolves. Follow a
     # symlink so hand-made hostname aliases collapse onto the real dir.

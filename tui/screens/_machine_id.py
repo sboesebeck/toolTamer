@@ -32,11 +32,20 @@ class MachineIdScreen(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, current: str, real_hostname: str, configs: list[str]):
+    def __init__(
+        self,
+        current: str,
+        real_hostname: str,
+        configs: list[str],
+        includers: list[str] = (),
+    ):
         super().__init__()
         self._current = current
         self._real_hostname = real_hostname
         self._configs = configs
+        # Configs whose includes.conf names `current`; rename_config will
+        # repoint them, and that is worth saying before Enter.
+        self._includers = list(includers)
 
     def compose(self) -> ComposeResult:
         with Container(id="machine-id-dialog"):
@@ -55,10 +64,13 @@ class MachineIdScreen(ModalScreen[str | None]):
         if value in self._configs:
             return f"[dim]Enter: switch to existing config [/][cyan]{value}[/]"
         if self._current in self._configs:
-            return (
+            hint = (
                 f"[dim]Enter: rename config [/][cyan]{self._current}[/]"
                 f"[dim] → [/][cyan]{value}[/]"
             )
+            if self._includers:
+                hint += f"[dim], also updates includes in: {', '.join(self._includers)}[/]"
+            return hint
         return f"[dim]Enter: use [/][cyan]{value}[/][dim] (config created on next tt run)[/]"
 
     def on_input_changed(self, event: Input.Changed) -> None:
