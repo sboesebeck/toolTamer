@@ -184,9 +184,10 @@ hostname, or, if `configs/<hostname>` is a symlink, with the directory the link 
 to — and added to the config repo's `.gitignore`, since it is specific to that machine.
 Without the file, the hostname is used. Pinning the id this way keeps the same config
 when the hostname changes with the network (VPN, DHCP domain, `.local` vs. `.fritz.box`),
-which used to require symlinks between config directories. Edit the file to switch a
-machine to another config; when the id differs from the hostname, `tt` and the TUI show
-both.
+which used to require symlinks between config directories. To rename it, use
+**M — Machine ID** in the TUI's main menu (the host config directory moves along with the
+name, or you switch to an existing config) or simply edit the file. When the id differs
+from the hostname, `tt` and the TUI show both.
 
 Inside the host config directory there should be several files: 
 
