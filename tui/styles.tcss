@@ -4,14 +4,26 @@ Screen {
 }
 
 /* -- Dashboard -- */
+/* Compact on purpose: a 24-row terminal must show the whole menu when
+   nothing is missing/extra, and scroll it otherwise (see #menu-panel). */
 #dashboard {
     layout: vertical;
-    padding: 1 2;
+    padding: 0 1;
+}
+
+#dashboard Container {
+    border-title-color: $primary;
+    border-title-style: bold;
+}
+
+#overview {
+    height: auto;
 }
 
 #status-panel {
     border: round $accent;
-    padding: 1 2;
+    padding: 0 1;
+    width: 3fr;
     height: auto;
 }
 
@@ -44,7 +56,8 @@ StatusBar Horizontal {
 
 #hierarchy-panel {
     border: round $accent;
-    padding: 1 2;
+    padding: 0 1;
+    width: 2fr;
     height: auto;
 }
 
@@ -58,12 +71,18 @@ StatusBar Horizontal {
 
 #menu-panel {
     border: round $primary;
-    padding: 1 2;
+    padding: 0 1;
     height: 1fr;
+    /* border + 3 entries: never collapse to nothing when the status
+       panel grows (long missing/extra lists). */
+    min-height: 5;
 }
 
+/* 1fr, not auto: the ListView is a scroll container, so once the panel
+   is shorter than the entries it scrolls (and shows a scrollbar) instead
+   of the Container clipping the tail silently. */
 #menu-panel ListView {
-    height: auto;
+    height: 1fr;
 }
 
 #menu-panel ListItem {

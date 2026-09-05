@@ -206,3 +206,48 @@ async def test_machine_id_hint_names_configs_whose_includes_move(tmp_config: Pat
         await pilot.press("enter")
         await pilot.pause()
         assert (other / "includes.conf").read_text() == "gandalf\n"
+
+
+# -- Layout on short terminals ---------------------------------------------
+#
+# The dashboard used to need ~43 rows before the last menu entry was on
+# screen; the Container clipped the rest silently and the ListView (height:
+# auto) could never scroll. These pin the compact layout and the scroll
+# fallback. 24 rows (the classic minimum terminal) now fits everything
+# even with missing/extra detail lines; the 30-row check stays robust to
+# however many packages the dev machine really has installed, and 20 rows
+# forces the scroll path.
+
+
+@pytest.mark.asyncio
+async def test_dashboard_status_and_hierarchy_side_by_side(app: ToolTamerApp):
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        status = app.screen.query_one("#status-panel")
+        hierarchy = app.screen.query_one("#hierarchy-panel")
+        assert status.region.y == hierarchy.region.y
+        assert status.region.x < hierarchy.region.x
+
+
+@pytest.mark.asyncio
+async def test_dashboard_menu_fits_on_30_rows(app: ToolTamerApp):
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        menu = app.screen.query_one(ListView)
+        items = list(menu.query("ListItem"))
+        assert menu.max_scroll_y == 0
+        assert items[-1].region.bottom <= 30 - 1  # above the docked Footer
+
+
+@pytest.mark.asyncio
+async def test_dashboard_menu_scrolls_on_20_rows(app: ToolTamerApp):
+    async with app.run_test(size=(100, 20)) as pilot:
+        await pilot.pause()
+        menu = app.screen.query_one(ListView)
+        # The list itself must stay on screen (not be clipped by its panel)...
+        assert menu.region.bottom <= 20 - 1
+        # ...and take over via scrolling instead of hiding the tail.
+        assert menu.max_scroll_y > 0
+        menu.index = len(list(menu.query("ListItem"))) - 1
+        await pilot.pause()
+        assert menu.scroll_y > 0

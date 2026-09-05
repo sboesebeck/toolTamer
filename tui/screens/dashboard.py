@@ -1,7 +1,7 @@
 """Main dashboard screen with status and menu."""
 
 from textual.app import ComposeResult
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, ListItem, ListView
 
@@ -70,17 +70,22 @@ class DashboardScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Container(id="dashboard"):
-            with Container(id="status-panel"):
-                yield Label("Status", classes="section-title")
-                yield StatusBar(
-                    tt_config=self._tt_config,
-                    system=self._system,
-                )
-            with Container(id="hierarchy-panel"):
-                yield Label("Config Hierarchy", classes="section-title")
-                yield ConfigHierarchy(self._tt_config, self._system.hostname)
-            with Container(id="menu-panel"):
-                yield Label("Actions", classes="section-title")
+            # Panel titles live in the border and status/hierarchy share
+            # one row: the stacked layout with padded panels needed ~43
+            # rows before the last menu entry was on screen, and a
+            # Container clips overflow silently.
+            with Horizontal(id="overview"):
+                with Container(id="status-panel") as status_panel:
+                    status_panel.border_title = "Status"
+                    yield StatusBar(
+                        tt_config=self._tt_config,
+                        system=self._system,
+                    )
+                with Container(id="hierarchy-panel") as hierarchy_panel:
+                    hierarchy_panel.border_title = "Config Hierarchy"
+                    yield ConfigHierarchy(self._tt_config, self._system.hostname)
+            with Container(id="menu-panel") as menu_panel:
+                menu_panel.border_title = "Actions"
                 items = [
                     MenuItem("U", "Update System", "packages + files + scripts", "sync_system"),
                     MenuItem("F", "Files Only", "sync config files", "sync_files"),

@@ -2,7 +2,7 @@
 
 from textual.app import ComposeResult
 from textual.widget import Widget
-from textual.widgets import Label, Static
+from textual.widgets import Static
 
 from tui.core.config import TTConfig
 
@@ -16,9 +16,8 @@ class ConfigHierarchy(Widget):
         self._host = host
 
     def compose(self) -> ComposeResult:
-        yield Label(
-            "[dim]Include chain for this host:[/]",
-        )
+        # No intro line: the panel border already says "Config Hierarchy"
+        # and every row counts on a 24-line terminal.
         yield Static(self._render_tree(), id="hierarchy-text")
 
     def _render_tree(self) -> str:
