@@ -674,7 +674,7 @@ function checkSystem() {
     UNINSTALL="brew uninstall"
     LIST="brew list -1"
     USES="brew uses --installed %%"
-    UPDATE="brew update && brew upgrade"
+    UPDATE="brew update && brew upgrade -y"
     ;;
   Linux*)
     log "$BL Info: Running on Linux$RESET"
@@ -741,11 +741,11 @@ function menu() {
     done
     local selection
     if selection=$(printf "%s\n" "${numbered[@]}" | fzf_themed \
-        --no-sort --no-multi --tac \
-        --border-label=" $prompt " \
-        --info=hidden \
-        --height="~$((${#options[@]} + 4))" \
-        --prompt="> "); then
+      --no-sort --no-multi --tac \
+      --border-label=" $prompt " \
+      --info=hidden \
+      --height="~$((${#options[@]} + 4))" \
+      --prompt="> "); then
       local num
       num=$(echo "$selection" | sed 's/^ *//' | cut -d. -f1)
       echo "${num}:${options[$((num - 1))]}"
