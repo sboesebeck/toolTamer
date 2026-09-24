@@ -262,6 +262,8 @@ In this case, the file `$HOME/.config/toolTamer/configs/HOSTNAME/files/myzshrc` 
 
 Comparison is done using `SHA` Checksums!
 
+A tracked directory is mirrored as a whole, but you can exclude entries from it with `.gitignore` / `.ttignore` files inside the directory (no git repo needed). Matched files are invisible to ToolTamer: not stored, not synced, not deleted, not hashed. Real gitignore semantics apply, and in the TUI new system-side files are offered one by one as *adopt* or *ignore* before a sync. See [Configuration → Ignoring files](configuration.md#ignoring-files-inside-a-tracked-directory-gitignore--ttignore) for the details.
+
 
 ### to_install.XXX
 The `to_install` files just contain a list of package names to be ensured on the system. Anything installed that is *not* in the list and that no other installed package depends on will be uninstalled / purged. This way, whenever you try out a tool and forget to uninstall it, ToolTamer will help you with that.

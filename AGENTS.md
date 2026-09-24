@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - `bin/tt` is the primary entry point; it sources `bin/include.sh` for shared helpers, inspects `$HOME/.config/toolTamer`, and runs the menu flow. It also bootstraps `.venv` and dispatches to the Python tools.
 - `bin/admin.sh` houses maintenance helpers (moving files, deduping packages) and depends on the environment bootstrapped by `tt`.
-- `tui/` is the Python/Textual half: the interactive TUI plus the helper tools (`tui/cleanup_deps.py`, `tui/fix_taps.py`, `tui/warm_deps.py`). Core logic in `tui/core/`, screens in `tui/screens/`, widgets in `tui/widgets/`.
+- `tui/` is the Python/Textual half: the interactive TUI plus the helper tools (`tui/cleanup_deps.py`, `tui/fix_taps.py`, `tui/warm_deps.py`, `tui/ttignore.py`). Core logic in `tui/core/` (including the shared ignore engine, `tui/core/ignore.py`), screens in `tui/screens/`, widgets in `tui/widgets/`.
 - `tests/` holds the pytest suite covering the Python half.
 - Configuration data never lives in this repo: scripts expect host-specific directories under `~/.config/toolTamer/configs/` (override with `TT_BASE`).
 - The host config is chosen by `$BASE/machine-id` (machine-local, gitignored), falling back to the hostname. `bin/tt` writes it (`writeMachineId` in `include.sh`), the Python side only reads it (`tui/core/machine_id.py`); `SystemInfo.hostname` is that effective name, `SystemInfo.real_hostname` what the network says. Keep the two parsers in sync.
@@ -53,5 +53,6 @@ These are documented at length in `CLAUDE.md` and in code comments; the short ve
 - **Two different dependency signals.** `list_dependency_packages()` = install *reason* (cheap, one call, can be stale). `get_required_by()` = structural, "is it needed right now" (slow, one call per package). Uninstall decisions use the structural one.
 - **Don't replace `brew uses` with a bulk formula query.** It looks ~20x faster but is formula-based rather than receipt-based, and reports genuinely-required packages as removable. Verified against all installed formulae. The slow call is cached instead (`tui/core/dep_cache.py`, shared with `bin/tt`).
 - **Tap packages are stored fully qualified** (`forketyfork/tap/clawtunes`) but *listed* installed under the short name. Compare via `tui/core/pkg_names.py`, never directly.
+- **Ignore rules are one engine, two callers.** `tui/core/ignore.py` (via `tui/ttignore.py` for Bash) decides the visible set of a tracked directory; never re-implement gitignore matching. `load()` returns `None` when a tree has no `.gitignore`/`.ttignore` — that is the zero-cost fast path every caller must preserve. Rules come from the system side when it exists, else the store.
 - **Textual `@work(exclusive=True)` shares one default group** — unrelated exclusive workers cancel each other unless given their own `group=`. `exclusive` also does not stop a running thread worker; check `worker.is_cancelled` yourself.
 - **`on_<message>` handlers run for every class in the MRO** that defines one, not just the most-derived override.

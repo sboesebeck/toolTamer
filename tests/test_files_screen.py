@@ -1159,3 +1159,383 @@ def test_save_change_reports_an_unreadable_store_instead_of_raising(
         assert any("unreadable" in line for line in log.lines), log.lines
     finally:
         os.chmod(store, 0o755)
+
+
+# --- Directory copies must keep symlinks as symlinks ----------------------
+
+
+from tui.core.config import dir_diff, tree_hash
+from tui.core.system import SystemInfo as _SystemInfo
+
+
+def _tree_with_symlinks(root: Path) -> None:
+    """A package-manager-style tree: real files plus a relative symlink and a
+    dangling one, which is what node_modules/.bin actually looks like."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "bin").mkdir()
+    (root / "lib").mkdir()
+    (root / "lib" / "cli.js").write_text("#!/usr/bin/env node\n")
+    (root / "bin" / "cli").symlink_to("../lib/cli.js")
+    (root / "bin" / "dangling").symlink_to("../lib/gone.js")
+
+
+def test_do_capture_keeps_symlinks_as_symlinks(tmp_config: Path, tmp_path: Path, monkeypatch):
+    """Regression: _do_capture's copytree had no symlinks=True, so copytree's
+    default (symlinks=False) dereferenced every symlink on the way into the
+    store — node_modules/.bin/* arrived as regular files.
+
+    iter_tree_files/_entry_fingerprint identify a symlink by its target
+    ("link:../lib/cli.js") and a regular file by its content, so the two trees
+    can never compare equal again: _file_status reports "modified" forever and
+    pressing u just re-dereferences the copy. That is the reported symptom —
+    the stored copy of ~/.config/opencode could not be updated.
+
+    Delete-and-recreate also means a vanished regular file (like a .bin entry
+    that was never a symlink) must not survive the capture."""
+    import os
+
+    home = tmp_path / "home"
+    sys_dir = home / ".config" / "opencode"
+    _tree_with_symlinks(sys_dir)
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text(".config/opencode;.config/opencode\n")
+    store = host / "files" / ".config" / "opencode"
+    store.mkdir(parents=True)
+    (store / "stale.txt").write_text("old\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = _bare_screen(tmp_config, [])
+
+    screen._do_capture("testhost", ".config/opencode", ".config/opencode", "parent")
+
+    assert (store / "bin" / "cli").is_symlink()
+    assert os.readlink(store / "bin" / "cli") == "../lib/cli.js"
+    assert (store / "bin" / "dangling").is_symlink()
+    assert not (store / "stale.txt").exists()
+    assert tree_hash(store) == tree_hash(sys_dir)
+    assert dir_diff(store, sys_dir) == ([], [], [])
+    assert screen._file_status(store, sys_dir) == "ok"
+
+
+def test_do_apply_keeps_symlinks_as_symlinks(tmp_config: Path, tmp_path: Path, monkeypatch):
+    """The apply direction had the same gap: a store→system copy materialised
+    regular files where the tracked tree has symlinks, breaking the package
+    manager's bins on the target machine (and bash's mirrorDir — rsync -a —
+    keeps them, so the two implementations disagreed)."""
+    import os
+
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    target = home / ".config" / "opencode"
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text(".config/opencode;.config/opencode\n")
+    store = host / "files" / ".config" / "opencode"
+    _tree_with_symlinks(store)
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = _bare_screen(tmp_config, [])
+
+    screen._do_apply("testhost", ".config/opencode", ".config/opencode")
+
+    assert (target / "bin" / "cli").is_symlink()
+    assert os.readlink(target / "bin" / "cli") == "../lib/cli.js"
+    assert (target / "bin" / "dangling").is_symlink()
+    assert tree_hash(target) == tree_hash(store)
+    assert dir_diff(target, store) == ([], [], [])
+
+
+def test_do_override_from_repo_keeps_symlinks_as_symlinks(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    """Store-to-store, third site: the host's local copy is the one the user
+    then edits and captures back, so a dereferenced override would keep the
+    entry "modified" even after that capture."""
+    import os
+
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+
+    common = tmp_config / "configs" / "common"
+    (common / "files.conf").write_text(".config/opencode;.config/opencode\n")
+    src = common / "files" / ".config" / "opencode"
+    _tree_with_symlinks(src)
+
+    host_name = _SystemInfo().hostname
+    dest = tmp_config / "configs" / host_name / "files" / ".config" / "opencode"
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = _bare_screen(tmp_config, [])
+
+    screen._do_override_from_repo("common", ".config/opencode", ".config/opencode")
+
+    assert (dest / "bin" / "cli").is_symlink()
+    assert os.readlink(dest / "bin" / "cli") == "../lib/cli.js"
+    assert (dest / "bin" / "dangling").is_symlink()
+    assert tree_hash(dest) == tree_hash(src)
+
+
+# --- ignore rules in the file manager ------------------------------------
+
+
+from tui.core.ignore import load as _load  # noqa: E402
+from tui.screens.files import ReviewNewFilesScreen, _new_system_files  # noqa: E402
+
+
+class _ReviewApp(App):
+    """Host app that pushes a ReviewNewFilesScreen and records its result."""
+
+    def __init__(self, screen):
+        super().__init__()
+        self._screen = screen
+        self.result = "unset"
+
+    def on_mount(self) -> None:
+        self.push_screen(self._screen, callback=self._on_result)
+
+    def _on_result(self, result) -> None:
+        self.result = result
+
+
+@pytest.mark.asyncio
+async def test_review_new_files_defaults_to_adopt():
+    from textual.widgets import SelectionList
+
+    screen = ReviewNewFilesScreen("Apply TT → ~/.config/app", ["a.txt", "b.txt"])
+    app = _ReviewApp(screen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        sl = screen.query_one(SelectionList)
+        assert sorted(sl.selected) == ["a.txt", "b.txt"]
+        await pilot.press("enter")
+        await pilot.pause()
+    assert app.result == {"a.txt": True, "b.txt": True}
+
+
+@pytest.mark.asyncio
+async def test_review_new_files_toggle_one_row_to_ignore():
+    from textual.widgets import SelectionList
+
+    screen = ReviewNewFilesScreen("Capture ~/.config/app", ["a.txt", "b.txt"])
+    app = _ReviewApp(screen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen.query_one(SelectionList).toggle("a.txt")
+        await pilot.press("enter")
+        await pilot.pause()
+    assert app.result == {"a.txt": False, "b.txt": True}
+
+
+@pytest.mark.asyncio
+async def test_review_new_files_ignore_all():
+    screen = ReviewNewFilesScreen("Capture ~/.config/app", ["a.txt", "b.txt"])
+    app = _ReviewApp(screen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.press("enter")
+        await pilot.pause()
+    assert app.result == {"a.txt": False, "b.txt": False}
+
+
+@pytest.mark.asyncio
+async def test_review_new_files_escape_aborts():
+    screen = ReviewNewFilesScreen("Capture ~/.config/app", ["a.txt"])
+    app = _ReviewApp(screen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+    assert app.result is None
+
+
+def test_new_system_files_excludes_store_and_ignored(tmp_path: Path):
+    store = tmp_path / "store"
+    system = tmp_path / "system"
+    for d in (store, system):
+        d.mkdir()
+        (d / ".gitignore").write_text("local.txt\n")
+    (store / "keep.txt").write_text("k\n")
+    (system / "keep.txt").write_text("k\n")
+    (system / "fresh.txt").write_text("f\n")
+    (system / "local.txt").write_text("l\n")
+
+    assert _new_system_files(store, system, _load(system)) == ["fresh.txt"]
+
+
+def test_do_apply_keeps_an_ignored_system_file(tmp_config: Path, tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    sys_dir = home / ".config" / "app"
+    sys_dir.mkdir(parents=True)
+    (sys_dir / ".gitignore").write_text("local.txt\ncache/\n")
+    (sys_dir / "keep.txt").write_text("keep\n")
+    (sys_dir / "local.txt").write_text("mine\n")
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("app;.config/app\n")
+    store = host / "files" / "app"
+    store.mkdir(parents=True)
+    (store / ".gitignore").write_text("local.txt\ncache/\n")
+    (store / "keep.txt").write_text("keep\n")
+    (store / "new.txt").write_text("new\n")
+    (store / "cache").mkdir()
+    (store / "cache" / "secret").write_text("s\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = _bare_screen(tmp_config, [])
+
+    screen._do_apply("testhost", "app", ".config/app")
+
+    # Ignored system file survives, the ignored store cache is not delivered.
+    assert (sys_dir / "local.txt").read_text() == "mine\n"
+    assert not (sys_dir / "cache").exists()
+    assert (sys_dir / "new.txt").read_text() == "new\n"
+
+
+def test_do_capture_does_not_capture_an_ignored_file(tmp_config: Path, tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    sys_dir = home / ".config" / "app"
+    sys_dir.mkdir(parents=True)
+    (sys_dir / ".gitignore").write_text("local.txt\n")
+    (sys_dir / "keep.txt").write_text("keep\n")
+    (sys_dir / "local.txt").write_text("mine\n")
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("app;.config/app\n")
+    store = host / "files" / "app"
+    store.mkdir(parents=True)
+    (store / "stale.txt").write_text("stale\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = _bare_screen(tmp_config, [])
+
+    screen._do_capture("testhost", "app", ".config/app", "parent")
+
+    assert (store / "keep.txt").read_text() == "keep\n"
+    assert (store / ".gitignore").is_file()
+    assert not (store / "local.txt").exists()
+    assert not (store / "stale.txt").exists()
+
+
+def test_process_review_ignore_writes_ttignore_on_both_sides(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    sys_dir = home / ".config" / "app"
+    sys_dir.mkdir(parents=True)
+    (sys_dir / "token.json").write_text("{}\n")
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("app;.config/app\n")
+    store = host / "files" / "app"
+    store.mkdir(parents=True)
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = _bare_screen(tmp_config, [])
+
+    screen._process_review(store, sys_dir, {"token.json": False})
+
+    assert "/token.json" in (sys_dir / ".ttignore").read_text()
+    assert "/token.json" in (store / ".ttignore").read_text()
+    assert _load(sys_dir).is_ignored("token.json")
+
+
+def test_process_review_adopt_copies_into_the_store(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    sys_dir = home / ".config" / "app"
+    sys_dir.mkdir(parents=True)
+    (sys_dir / "new.txt").write_text("new\n")
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("app;.config/app\n")
+    store = host / "files" / "app"
+    store.mkdir(parents=True)
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = _bare_screen(tmp_config, [])
+
+    screen._process_review(store, sys_dir, {"new.txt": True})
+
+    assert (store / "new.txt").read_text() == "new\n"
+    assert not (sys_dir / ".ttignore").exists()
+
+
+def _review_setup(tmp_config: Path, tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    sys_dir = home / ".config" / "app"
+    sys_dir.mkdir(parents=True)
+    (sys_dir / "keep.txt").write_text("keep\n")
+    (sys_dir / "fresh.txt").write_text("fresh\n")
+
+    host = tmp_config / "configs" / "testhost"
+    (host / "files.conf").write_text("app;.config/app\n")
+    store = host / "files" / "app"
+    store.mkdir(parents=True)
+    (store / "keep.txt").write_text("keep\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    return store, sys_dir, _bare_screen(tmp_config, [])
+
+
+def test_after_apply_review_escape_aborts_the_sync(tmp_config: Path, tmp_path: Path, monkeypatch):
+    store, sys_dir, screen = _review_setup(tmp_config, tmp_path, monkeypatch)
+
+    screen._after_apply_review("testhost", "app", ".config/app", None)
+
+    # Nothing was mirrored and nothing was ignored.
+    assert (sys_dir / "fresh.txt").is_file()
+    assert not (store / "fresh.txt").exists()
+    assert not (sys_dir / ".ttignore").exists()
+
+
+def test_after_apply_review_adopt_keeps_and_stores_the_file(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    store, sys_dir, screen = _review_setup(tmp_config, tmp_path, monkeypatch)
+
+    screen._after_apply_review("testhost", "app", ".config/app", {"fresh.txt": True})
+
+    assert (sys_dir / "fresh.txt").is_file()
+    assert (store / "fresh.txt").read_text() == "fresh\n"
+
+
+def test_after_apply_review_ignore_writes_rules_on_both_sides(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    store, sys_dir, screen = _review_setup(tmp_config, tmp_path, monkeypatch)
+
+    screen._after_apply_review("testhost", "app", ".config/app", {"fresh.txt": False})
+
+    assert (sys_dir / "fresh.txt").is_file()
+    assert "/fresh.txt" in (sys_dir / ".ttignore").read_text()
+    assert "/fresh.txt" in (store / ".ttignore").read_text()
+
+
+def test_after_capture_review_override_writes_rules_to_the_host_store(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    sys_dir = home / ".config" / "app"
+    sys_dir.mkdir(parents=True)
+    (sys_dir / "fresh.txt").write_text("fresh\n")
+
+    parent = tmp_config / "configs" / "common"
+    (parent / "files.conf").write_text("app;.config/app\n")
+    parent_store = parent / "files" / "app"
+    parent_store.mkdir(parents=True)
+    host_store = tmp_config / "configs" / _SystemInfo().hostname / "files" / "app"
+    host_store.mkdir(parents=True)
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    screen = _bare_screen(tmp_config, [])
+
+    screen._after_capture_review(
+        "common", "app", ".config/app", "override", {"fresh.txt": False}
+    )
+
+    assert "/fresh.txt" in (sys_dir / ".ttignore").read_text()
+    assert "/fresh.txt" in (host_store / ".ttignore").read_text()
+    assert not (parent_store / ".ttignore").exists()

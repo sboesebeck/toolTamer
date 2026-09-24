@@ -39,9 +39,12 @@ BINDIR=$(pwd)
 function ensure_tui_venv() {
   local REPO_ROOT="$BINDIR/.."
   local VENV="$REPO_ROOT/.venv"
-  # Check venv exists AND textual is importable (not just python3 binary)
+  # Check venv exists AND its runtime deps are importable (not just the
+  # python3 binary). pathspec is included because the ignore engine
+  # (tui/core/ignore.py) needs it, and an existing venv bootstrapped before
+  # it was added must be refreshed rather than silently left without it.
   if [ -d "$VENV" ] && [ -x "$VENV/bin/python3" ] \
-     && "$VENV/bin/python3" -c "import textual" 2>/dev/null; then
+     && "$VENV/bin/python3" -c "import textual, pathspec" 2>/dev/null; then
     return 0
   fi
   # Find python 3.12+

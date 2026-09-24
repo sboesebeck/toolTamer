@@ -7,6 +7,7 @@ from rich.text import Text
 
 from textual import work
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
@@ -17,23 +18,48 @@ from textual.widgets import (
     Label,
     OptionList,
     RichLog,
+    SelectionList,
 )
 from textual.widgets.option_list import Option
+from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
 from tui.core import repo as repo_mod
-from tui.core.config import TTConfig, dir_diff, dir_fully_readable, tree_hash, tree_signature
+from tui.core.config import (
+    TTConfig,
+    dir_diff,
+    dir_fully_readable,
+    iter_tree_files,
+    mirror_tree,
+    tree_hash,
+    tree_signature,
+)
 from tui.core.diff_render import render_changed_diffs
+from tui.core.ignore import IgnoreMatcher, append_ignore, load
 from tui.core.repo import RepoSpec
 from tui.core.system import SystemInfo
 
 
-def _dir_deletions(source: Path, dest: Path) -> list[str]:
+def _dir_deletions(
+    source: Path, dest: Path, matcher: IgnoreMatcher | None = None
+) -> list[str]:
     """Return relative paths that exist under dest but not source — i.e., the
-    files that would be removed by replacing dest with a fresh copy of source."""
+    files that would be removed by replacing dest with a fresh copy of source.
+    The matcher (rules from the source side) filters both trees, so ignored
+    destination files are never listed for deletion."""
     if not (dest.exists() and dest.is_dir() and source.exists() and source.is_dir()):
         return []
-    return dir_diff(source, dest)[1]
+    return dir_diff(source, dest, matcher)[1]
+
+
+def _new_system_files(store: Path, system: Path, matcher: IgnoreMatcher | None) -> list[str]:
+    """Relative paths that exist on the system but not in the store, visible
+    under `matcher`. These are exactly the files an unignored mirror would
+    delete (TT -> system) or newly absorb (system -> TT)."""
+    if not (store.is_dir() and system.is_dir()):
+        return []
+    stored = {rel for rel, _ in iter_tree_files(store, matcher)}
+    return sorted(rel for rel, _ in iter_tree_files(system, matcher) if rel not in stored)
 
 
 # repo_mod.classify() owns the RepoStatus -> bucket mapping (synced/changed/
@@ -213,13 +239,17 @@ class FileScreen(Screen):
             # every keystroke.
             self._render_rows(event.value)
 
-    def _cached_tree_hash(self, root: Path) -> str:
-        key = str(root)
-        sig = tree_signature(root)
+    def _cached_tree_hash(
+        self, root: Path, matcher: IgnoreMatcher | None = None, key_suffix: str = ""
+    ) -> str:
+        # The rules root is part of the cache key: the same tree hashes
+        # differently under different ignore rules.
+        key = f"{root}|{key_suffix}" if key_suffix else str(root)
+        sig = tree_signature(root, matcher)
         cached = self._tree_cache.get(key)
         if cached and cached[0] == sig:
             return cached[1]
-        h = tree_hash(root)
+        h = tree_hash(root, matcher)
         self._tree_cache[key] = (sig, h)
         return h
 
@@ -328,8 +358,18 @@ class FileScreen(Screen):
         if not system.exists():
             return "missing_system"
         if repo.is_dir() and system.is_dir():
+            # Rules come from the system side (the worktree); the matcher
+            # filters both trees, so an ignored file cannot make an entry
+            # read as "modified".
+            matcher = load(system)
+            suffix = str(system) if matcher is not None else ""
             try:
-                return "ok" if self._cached_tree_hash(repo) == self._cached_tree_hash(system) else "modified"
+                return (
+                    "ok"
+                    if self._cached_tree_hash(repo, matcher, suffix)
+                    == self._cached_tree_hash(system, matcher, suffix)
+                    else "modified"
+                )
             except (OSError, PermissionError):
                 return "ok"
         if repo.is_dir() or system.is_dir():
@@ -481,7 +521,9 @@ class FileScreen(Screen):
         elif not sys_file.exists():
             self.app.call_from_thread(log.write, Text("System file missing (a=apply from TT)", style="red"))
         elif repo_file.is_dir() and sys_file.is_dir():
-            only_repo, only_sys, changed = dir_diff(repo_file, sys_file)
+            only_repo, only_sys, changed = dir_diff(
+                repo_file, sys_file, load(sys_file)
+            )
             if not (only_repo or only_sys or changed):
                 self.app.call_from_thread(log.write, Text("Directories are identical", style="green"))
             else:
@@ -625,7 +667,31 @@ class FileScreen(Screen):
             self._do_apply(config, stored, target)
             return
         if repo_file.is_dir() and sys_file.is_dir():
-            deletions = _dir_deletions(repo_file, sys_file)
+            # New system files were, until now, exactly the set this action
+            # deleted. Ask per file first (adopt or ignore) instead of
+            # deleting blindly; the ConfirmDeletionsScreen below stays as the
+            # last safety net, and is then empty.
+            matcher = load(sys_file)
+            new_files = _new_system_files(repo_file, sys_file, matcher)
+            if new_files:
+                self.app.push_screen(
+                    ReviewNewFilesScreen(f"Apply TT → ~/{eff_target}", new_files),
+                    callback=lambda decisions: self._after_apply_review(
+                        config, stored, target, decisions
+                    ),
+                )
+                return
+        self._apply_dir_tail(config, stored, target)
+
+    def _apply_dir_tail(self, config: str, stored: str, target: str) -> None:
+        """Deletion confirmation and apply, after any new-file review."""
+        from tui.core.config import _resolve_effective_target
+        eff_target = _resolve_effective_target(stored, target)
+        repo_file = self._tt_config.configs_dir / config / "files" / stored
+        sys_file = Path.home() / eff_target
+        if repo_file.is_dir() and sys_file.is_dir():
+            matcher = load(sys_file)
+            deletions = _dir_deletions(repo_file, sys_file, matcher)
             if deletions:
                 self.app.push_screen(
                     ConfirmDeletionsScreen(
@@ -638,9 +704,50 @@ class FileScreen(Screen):
                 return
         self._do_apply(config, stored, target)
 
-    def _do_apply(self, config: str, stored: str, target: str) -> None:
+    def _after_apply_review(
+        self, config: str, stored: str, target: str, decisions: "dict[str, bool] | None"
+    ) -> None:
+        if decisions is None:
+            # Esc: no sync in this direction at all.
+            return
+        from tui.core.config import _resolve_effective_target
+        store = self._tt_config.configs_dir / config / "files" / stored
+        sys_file = Path.home() / _resolve_effective_target(stored, target)
+        self._process_review(store, sys_file, decisions)
+        self._apply_dir_tail(config, stored, target)
+
+    def _process_review(
+        self, store: Path, sys_file: Path, decisions: "dict[str, bool]"
+    ) -> None:
+        """Apply the review outcome: adopted files are copied into the store,
+        ignored ones get an anchored `.ttignore` line on both sides."""
         import os
         import shutil
+
+        for rel, adopt in decisions.items():
+            is_dir = (sys_file / rel).is_dir() and not (sys_file / rel).is_symlink()
+            if adopt:
+                src = sys_file / rel
+                dst = store / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if dst.exists() or dst.is_symlink():
+                    if dst.is_dir() and not dst.is_symlink():
+                        shutil.rmtree(dst)
+                    else:
+                        dst.unlink()
+                if src.is_symlink():
+                    os.symlink(os.readlink(src), dst)
+                elif src.is_dir():
+                    mirror_tree(src, dst, None)
+                else:
+                    shutil.copy2(src, dst)
+            else:
+                append_ignore(sys_file, rel, is_dir)
+                append_ignore(store, rel, is_dir)
+
+    def _do_apply(self, config: str, stored: str, target: str) -> None:
+        import os
+
         from tui.core.config import _resolve_effective_target
         from tui.core.repo import read_marker, sync_to_system
         repo_file = self._tt_config.configs_dir / config / "files" / stored
@@ -693,13 +800,17 @@ class FileScreen(Screen):
             )
             return
         if repo_file.is_dir():
-            sys_file.parent.mkdir(parents=True, exist_ok=True)
-            if sys_file.exists():
-                if sys_file.is_dir():
-                    shutil.rmtree(sys_file)
-                else:
-                    sys_file.unlink()
-            shutil.copytree(repo_file, sys_file)
+            # Rules from the system side (the worktree) when it is a
+            # directory, else the store. With a matcher this mirrors only the
+            # visible set and preserves ignored system files; without one it
+            # keeps the old wipe-and-copy (mirror_tree handles both).
+            matcher = load(sys_file if sys_file.is_dir() else repo_file)
+            # mirror_tree copies with symlinks preserved (matching add_path
+            # and mirrorDir's `rsync -a`): copytree's default dereferences, so
+            # a tracked tree would land here as regular files — and a dangling
+            # symlink, which node_modules/.bin is full of, would abort the
+            # copy outright instead of being mirrored.
+            mirror_tree(repo_file, sys_file, matcher)
         else:
             sys_file.parent.mkdir(parents=True, exist_ok=True)
             sys_file.write_bytes(repo_file.read_bytes())
@@ -824,8 +935,39 @@ class FileScreen(Screen):
         else:
             dest_path = self._tt_config.configs_dir / config / "files" / stored
         if sys_path.is_dir() and dest_path.is_dir():
-            deletions = _dir_deletions(sys_path, dest_path)
+            # Files that would be newly absorbed: offer adopt/ignore before
+            # the mirror. Deletions (files removed on the system) are a
+            # different question and keep their existing confirmation.
+            matcher = load(sys_path)
+            new_files = _new_system_files(dest_path, sys_path, matcher)
+            if new_files:
+                target_label = host if choice == "override" else config
+                self.app.push_screen(
+                    ReviewNewFilesScreen(
+                        f"Capture ~/{eff_target} → '{target_label}'", new_files
+                    ),
+                    callback=lambda decisions: self._after_capture_review(
+                        config, stored, target, choice, decisions
+                    ),
+                )
+                return
+        self._capture_dir_tail(config, stored, target, choice, dest_path, sys_path, eff_target)
+
+    def _capture_dir_tail(
+        self,
+        config: str,
+        stored: str,
+        target: str,
+        choice: str | None,
+        dest_path: Path,
+        sys_path: Path,
+        eff_target: str,
+    ) -> None:
+        if sys_path.is_dir() and dest_path.is_dir():
+            matcher = load(sys_path)
+            deletions = _dir_deletions(sys_path, dest_path, matcher)
             if deletions:
+                host = self._system.hostname
                 target_label = host if choice == "override" else config
                 self.app.push_screen(
                     ConfirmDeletionsScreen(
@@ -838,9 +980,30 @@ class FileScreen(Screen):
                 return
         self._do_capture(config, stored, target, choice)
 
-    def _do_capture(self, config: str, stored: str, target: str, choice: str | None) -> None:
-        import shutil
+    def _after_capture_review(
+        self,
+        config: str,
+        stored: str,
+        target: str,
+        choice: str | None,
+        decisions: "dict[str, bool] | None",
+    ) -> None:
+        if decisions is None:
+            return
+        from tui.core.config import _resolve_effective_target
+        eff_target = _resolve_effective_target(stored, target)
+        sys_path = Path.home() / eff_target
+        host = self._system.hostname
+        if choice == "override":
+            dest_path = self._tt_config.configs_dir / host / "files" / stored
+        else:
+            dest_path = self._tt_config.configs_dir / config / "files" / stored
+        self._process_review(dest_path, sys_path, decisions)
+        self._capture_dir_tail(
+            config, stored, target, choice, dest_path, sys_path, eff_target
+        )
 
+    def _do_capture(self, config: str, stored: str, target: str, choice: str | None) -> None:
         if choice not in ("parent", "override"):
             return
         from tui.core.config import _resolve_effective_target
@@ -866,12 +1029,14 @@ class FileScreen(Screen):
             return
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         if sys_path.is_dir():
-            if dest_path.exists():
-                if dest_path.is_dir():
-                    shutil.rmtree(dest_path)
-                else:
-                    dest_path.unlink()
-            shutil.copytree(sys_path, dest_path)
+            # Rules from the system source. mirror_tree preserves symlinks
+            # (copytree's default dereferences, so the store would get regular
+            # files wherever the system has a link — then iter_tree_files
+            # fingerprints a link by target and a file by content, so the
+            # entry reads as "modified" forever and saving again only
+            # re-dereferences the fresh copy).
+            matcher = load(sys_path)
+            mirror_tree(sys_path, dest_path, matcher)
         else:
             dest_path.write_bytes(sys_path.read_bytes())
         if choice == "override":
@@ -933,8 +1098,6 @@ class FileScreen(Screen):
         self._do_override_from_repo(config, stored, target)
 
     def _do_override_from_repo(self, config: str, stored: str, target: str) -> None:
-        import shutil
-
         host = self._system.hostname
         src_path = self._tt_config.configs_dir / config / "files" / stored
         if not src_path.exists():
@@ -951,12 +1114,12 @@ class FileScreen(Screen):
             return
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         if src_path.is_dir():
-            if dest_path.exists():
-                if dest_path.is_dir():
-                    shutil.rmtree(dest_path)
-                else:
-                    dest_path.unlink()
-            shutil.copytree(src_path, dest_path)
+            # Store-to-store: the rules come from the source (parent) config.
+            # mirror_tree preserves symlinks — this copy is what the user
+            # edits and captures back, so dereferencing it here would poison
+            # every later capture exactly like _do_capture's copy used to.
+            matcher = load(src_path)
+            mirror_tree(src_path, dest_path, matcher)
         else:
             dest_path.write_bytes(src_path.read_bytes())
         self._tt_config.add_file_mapping(host, stored, target)
@@ -1145,6 +1308,80 @@ class FileScreen(Screen):
         self.app.push_screen(
             ConvertToRepoScreen(eff, config, spec, count), callback=_after
         )
+
+
+class ReviewNewFilesScreen(ModalScreen["dict[str, bool] | None"]):
+    """Per-file adopt/ignore decision for files that are new on the system.
+
+    Selected row = adopt (keep the file, copy it across); unselected =
+    ignore (write it into `.ttignore` on both sides). Returns
+    `{rel: adopt}` on confirm, None on Esc (abort the sync in this
+    direction)."""
+
+    # Priority bindings: the focused SelectionList otherwise consumes plain
+    # key presses (its own type-ahead), so these never reach the screen.
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel sync", priority=True),
+        Binding("a", "select_all", "Adopt all", priority=True),
+        Binding("n", "select_none", "Ignore all", priority=True),
+        Binding("enter", "confirm", "Confirm", priority=True),
+    ]
+
+    DEFAULT_CSS = """
+    ReviewNewFilesScreen {
+        align: center middle;
+    }
+    #review-new-dialog {
+        width: 90;
+        height: auto;
+        max-height: 80%;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #review-new-list {
+        height: 20;
+        max-height: 20;
+        border: round $panel;
+    }
+    """
+
+    def __init__(self, header: str, files: list[str]):
+        super().__init__()
+        self._header = header
+        self._files = files
+
+    def compose(self) -> ComposeResult:
+        with Container(id="review-new-dialog"):
+            yield Label(Text(self._header, style="bold cyan"))
+            yield Label(Text(""))
+            yield Label(Text(
+                f"{len(self._files)} new file(s) — selected = adopt, "
+                f"unselected = ignore:",
+                style="bold",
+            ))
+            yield SelectionList(
+                *[Selection(f, value=f, initial_state=True) for f in self._files],
+                id="review-new-list",
+            )
+            yield Label(Text(""))
+            yield Label(Text(
+                "Space=toggle  a=adopt all  n=ignore all  Enter=confirm  Esc=cancel",
+                style="dim",
+            ))
+
+    def action_select_all(self) -> None:
+        self.query_one("#review-new-list", SelectionList).select_all()
+
+    def action_select_none(self) -> None:
+        self.query_one("#review-new-list", SelectionList).deselect_all()
+
+    def action_confirm(self) -> None:
+        selected = set(self.query_one("#review-new-list", SelectionList).selected)
+        self.dismiss({rel: (rel in selected) for rel in self._files})
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ConfirmDeletionsScreen(ModalScreen[bool]):

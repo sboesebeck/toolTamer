@@ -556,3 +556,118 @@ def test_missing_includes_ignores_the_host_itself(tmp_config: Path):
     # A host without a config dir yet is "missing" too, but that is the
     # normal first-run state and not an includes.conf error.
     assert TTConfig(tmp_config).missing_includes("brandnew") == []
+
+
+# --- ignore-aware tree operations ----------------------------------------
+
+
+from tui.core.config import (  # noqa: E402
+    dir_diff,
+    iter_tree_files,
+    mirror_tree,
+    tree_hash,
+    tree_signature,
+)
+from tui.core.ignore import load  # noqa: E402
+
+
+def _tracked_tree(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "keep.txt").write_text("keep\n")
+    (root / "cache").mkdir()
+    (root / "cache" / "blob").write_text("blob\n")
+    (root / ".gitignore").write_text("cache/\n")
+
+
+def test_iter_tree_files_with_matcher_drops_and_prunes(tmp_path: Path):
+    _tracked_tree(tmp_path)
+    matcher = load(tmp_path)
+    rels = sorted(rel for rel, _ in iter_tree_files(tmp_path, matcher))
+    assert rels == [".gitignore", "keep.txt"]
+
+
+def test_tree_hash_ignores_changes_inside_an_ignored_directory(tmp_path: Path):
+    _tracked_tree(tmp_path)
+    matcher = load(tmp_path)
+    before = tree_hash(tmp_path, matcher)
+    (tmp_path / "cache" / "blob").write_text("changed\n")
+    assert tree_hash(tmp_path, matcher) == before
+    # Without the matcher the change is visible.
+    assert tree_hash(tmp_path) != tree_hash(tmp_path, matcher)
+
+
+def test_tree_signature_is_matcher_aware(tmp_path: Path):
+    _tracked_tree(tmp_path)
+    matcher = load(tmp_path)
+    before = tree_signature(tmp_path, matcher)
+    (tmp_path / "cache" / "blob").write_text("changed\n")
+    assert tree_signature(tmp_path, matcher) == before
+
+
+def test_dir_diff_with_matcher_hides_ignored_extras(tmp_path: Path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    for d in (src, dst):
+        d.mkdir()
+        (d / ".gitignore").write_text("cache/\n")
+        (d / "keep.txt").write_text("keep\n")
+    (dst / "cache").mkdir()
+    (dst / "cache" / "local").write_text("local\n")
+
+    only_src, only_dst, changed = dir_diff(src, dst)
+    assert "cache/local" in only_dst
+
+    matcher = load(src)
+    only_src, only_dst, changed = dir_diff(src, dst, matcher)
+    assert only_src == [] and only_dst == [] and changed == []
+
+
+def test_add_path_directory_snapshot_excludes_ignored_files(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    source = home / ".config" / "app"
+    _tracked_tree(source)
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    cfg = TTConfig(tmp_config)
+    cfg.add_path("testhost", source, "testhost", home=home)
+
+    store = tmp_config / "configs" / "testhost" / "files" / ".config" / "app"
+    assert (store / "keep.txt").is_file()
+    assert (store / ".gitignore").is_file()
+    assert not (store / "cache").exists()
+
+
+def test_mirror_tree_keeps_ignored_destination_files(tmp_path: Path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    for d in (src, dst):
+        d.mkdir()
+        (d / ".gitignore").write_text("cache/\n")
+        (d / "keep.txt").write_text("keep\n")
+    (src / "cache").mkdir()
+    (src / "cache" / "new").write_text("new\n")
+    (dst / "cache").mkdir()
+    (dst / "cache" / "local").write_text("local\n")
+
+    mirror_tree(src, dst, load(src))
+
+    # The source's ignored cache is not delivered; the destination's is kept.
+    assert (dst / "cache" / "local").read_text() == "local\n"
+    assert not (dst / "cache" / "new").exists()
+
+
+def test_mirror_tree_removes_visible_destination_extras(tmp_path: Path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    for d in (src, dst):
+        d.mkdir()
+        (d / ".gitignore").write_text("cache/\n")
+    (src / "keep.txt").write_text("keep\n")
+    (dst / "stale.txt").write_text("stale\n")
+
+    mirror_tree(src, dst, load(src))
+
+    assert not (dst / "stale.txt").exists()
+    assert (dst / "keep.txt").read_text() == "keep\n"

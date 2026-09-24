@@ -6,6 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from tui.core.ignore import IgnoreMatcher, iter_visible, load
 from tui.core.repo import RepoSpec, detect, read_marker, write_marker
 
 
@@ -22,23 +23,17 @@ def _path_within(child: str, parent: str) -> bool:
     return child != parent and child.startswith(parent.rstrip("/") + "/")
 
 
-def iter_tree_files(root: Path):
+def iter_tree_files(root: Path, matcher: IgnoreMatcher | None = None):
     """Yield (relative_posix_path, path) for every file and symlink under
     root. Symlinks (including symlinked directories) are treated as leaf
-    entries and never followed."""
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        base = Path(dirpath)
-        for name in filenames:
-            p = base / name
-            yield p.relative_to(root).as_posix(), p
-        for name in list(dirnames):
-            p = base / name
-            if p.is_symlink():
-                dirnames.remove(name)
-                yield p.relative_to(root).as_posix(), p
+    entries and never followed.
+
+    With a matcher, ignored entries are dropped and ignored directories are
+    pruned. matcher=None is the unchanged, pre-ignore behaviour."""
+    yield from iter_visible(root, matcher)
 
 
-def dir_fully_readable(root: Path) -> bool:
+def dir_fully_readable(root: Path, matcher: IgnoreMatcher | None = None) -> bool:
     """True when every file under `root` can be enumerated.
 
     The Python counterpart of dirFullyReadable() in bin/include.sh, and it
@@ -64,7 +59,9 @@ def dir_fully_readable(root: Path) -> bool:
         nonlocal failed
         failed = True
 
-    for _dirpath, _dirnames, _filenames in os.walk(root, onerror=_onerror, followlinks=False):
+    # iter_visible prunes ignored directories, so an ignored, unreadable
+    # directory is not visited and cannot fail the check.
+    for _rel, _path in iter_visible(root, matcher, onerror=_onerror):
         if failed:
             return False
     return not failed
@@ -83,11 +80,11 @@ def _entry_fingerprint(path: Path) -> str:
     return h.hexdigest()
 
 
-def tree_signature(root: Path) -> str:
+def tree_signature(root: Path, matcher: IgnoreMatcher | None = None) -> str:
     """Cheap stat-based fingerprint of a directory tree (no content reads).
     Useful as a cache key: if unchanged, the tree_hash is unchanged too."""
     sig = hashlib.sha1()
-    for rel, p in sorted(iter_tree_files(root)):
+    for rel, p in sorted(iter_tree_files(root, matcher)):
         try:
             st = p.lstat()
         except OSError:
@@ -96,19 +93,25 @@ def tree_signature(root: Path) -> str:
     return sig.hexdigest()
 
 
-def tree_hash(root: Path) -> str:
-    """Content hash over all files/symlinks (path + content) of a tree."""
+def tree_hash(root: Path, matcher: IgnoreMatcher | None = None) -> str:
+    """Content hash over all files/symlinks (path + content) of a tree.
+    With a matcher, ignored entries are left out of the hash."""
     h = hashlib.sha1()
-    for rel, p in sorted(iter_tree_files(root)):
+    for rel, p in sorted(iter_tree_files(root, matcher)):
         h.update(f"{_entry_fingerprint(p)}  {rel}\n".encode())
     return h.hexdigest()
 
 
-def dir_diff(source: Path, dest: Path) -> tuple[list[str], list[str], list[str]]:
+def dir_diff(
+    source: Path, dest: Path, matcher: IgnoreMatcher | None = None
+) -> tuple[list[str], list[str], list[str]]:
     """Compare two trees. Returns (only_in_source, only_in_dest, changed),
-    each a sorted list of relative paths."""
-    src = {rel: p for rel, p in iter_tree_files(source)} if source.is_dir() else {}
-    dst = {rel: p for rel, p in iter_tree_files(dest)} if dest.is_dir() else {}
+    each a sorted list of relative paths.
+
+    The same matcher filters both sides; rules come from the source side, so
+    `source` and `dest` must share the relative layout the rules describe."""
+    src = {rel: p for rel, p in iter_tree_files(source, matcher)} if source.is_dir() else {}
+    dst = {rel: p for rel, p in iter_tree_files(dest, matcher)} if dest.is_dir() else {}
     only_src = sorted(set(src) - set(dst))
     only_dst = sorted(set(dst) - set(src))
     changed = sorted(
@@ -116,6 +119,73 @@ def dir_diff(source: Path, dest: Path) -> tuple[list[str], list[str], list[str]]
         if _entry_fingerprint(src[rel]) != _entry_fingerprint(dst[rel])
     )
     return only_src, only_dst, changed
+
+
+def copytree_ignore(matcher: IgnoreMatcher | None, root: Path):
+    """An shutil.copytree `ignore` callback driven by `matcher`.
+
+    Returning a directory name from the callback makes copytree skip it
+    entirely (no recursion), so ignored directories are pruned exactly as
+    iter_visible prunes them. None matcher yields None, i.e. copytree's
+    default behaviour."""
+    if matcher is None:
+        return None
+
+    def _ignore(dirpath: str, names: list[str]) -> set[str]:
+        base = Path(dirpath)
+        rel_dir = base.relative_to(root)
+        ignored: set[str] = set()
+        for name in names:
+            p = base / name
+            rel = (rel_dir / name).as_posix()
+            is_dir = p.is_dir() and not p.is_symlink()
+            if matcher.is_ignored(rel, is_dir=is_dir):
+                ignored.add(name)
+        return ignored
+
+    return _ignore
+
+
+def mirror_tree(src: Path, dest: Path, matcher: IgnoreMatcher | None) -> None:
+    """Mirror `src` onto `dest` (which may not exist yet), keeping ignored
+    entries on `dest` untouched.
+
+    Only visible source entries are copied; only visible destination entries
+    that are absent from the source are removed. An ignored destination file
+    therefore survives, and an ignored source file is never delivered.
+    matcher=None falls back to the old wipe-and-copy semantics."""
+    if matcher is None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink()
+        shutil.copytree(src, dest, symlinks=True)
+        return
+
+    src_visible = {rel: p for rel, p in iter_tree_files(src, matcher)}
+    if dest.exists() and not dest.is_dir():
+        dest.unlink()
+    dest.mkdir(parents=True, exist_ok=True)
+
+    if dest.is_dir():
+        for rel, p in iter_tree_files(dest, matcher):
+            if rel not in src_visible:
+                p.unlink()
+
+    for rel, p in src_visible.items():
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink() or target.exists():
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        if p.is_symlink():
+            os.symlink(os.readlink(p), target)
+        else:
+            shutil.copy2(p, target, follow_symlinks=False)
 
 
 @dataclass
@@ -485,7 +555,13 @@ class TTConfig:
                 shutil.rmtree(dest_target)
             elif dest_target.exists() or dest_target.is_symlink():
                 dest_target.unlink()
-            shutil.copytree(source, dest_target, symlinks=True)
+            # The source's own ignore files decide what enters the snapshot:
+            # a fresh add must not pull caches/secrets from the system tree.
+            matcher = load(source)
+            shutil.copytree(
+                source, dest_target, symlinks=True,
+                ignore=copytree_ignore(matcher, source),
+            )
             self.add_file_mapping(dest_config, rel, rel)
             report.append(f"Added directory ~/{rel} to '{dest_config}'")
             report += self._absorb_into_dir(dest_config, rel, rel)

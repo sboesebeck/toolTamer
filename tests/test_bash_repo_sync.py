@@ -715,3 +715,127 @@ def test_sync_repo_syncs_normally_when_head_matches_the_marker_branch(
 
     assert not (target / "junk.txt").exists()
     assert "Reset repo" in _summary(tmp_path)
+
+
+# --- ignore rules (.gitignore / .ttignore) in the Bash mirror -------------
+
+
+def _ignored_tree(root: Path) -> None:
+    (root / "cache").mkdir(parents=True)
+    (root / "keep.txt").write_text("keep\n")
+    (root / "cache" / "blob").write_text("blob\n")
+    (root / ".gitignore").write_text("cache/\n")
+
+
+def test_mirror_dir_keeps_ignored_destination_entries(tmp_path: Path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    _ignored_tree(src)
+    _ignored_tree(dst)
+    (dst / "stale.txt").write_text("stale\n")
+    (dst / "cache" / "blob").write_text("dstblob\n")
+    (dst / "cache" / "local").write_text("local\n")
+
+    result = run_bash(f'mirrorDir "{src}" "{dst}"; echo "rc=$?"', tmp_path)
+
+    assert result.stdout.strip().splitlines()[-1] == "rc=0"
+    assert (dst / "keep.txt").is_file()
+    # Visible extra is deleted, the ignored ones survive...
+    assert not (dst / "stale.txt").exists()
+    assert (dst / "cache" / "local").read_text() == "local\n"
+    # ...and the ignored source blob is not delivered over the local one.
+    assert (dst / "cache" / "blob").read_text() == "dstblob\n"
+
+
+def test_mirror_dir_fast_path_does_not_need_the_engine(tmp_path: Path):
+    """Without any ignore file the old rsync/find path runs: no engine, no
+    Python. Injecting a failing engine must not matter."""
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    (src / "keep.txt").write_text("keep\n")
+    dst.mkdir()
+    (dst / "stale.txt").write_text("stale\n")
+
+    result = run_bash(
+        f'ttIgnoreEngine() {{ return 1; }}; mirrorDir "{src}" "{dst}"; echo "rc=$?"',
+        tmp_path,
+    )
+
+    assert result.stdout.strip().splitlines()[-1] == "rc=0"
+    assert (dst / "keep.txt").is_file()
+    assert not (dst / "stale.txt").exists()
+
+
+def test_mirror_dir_refuses_when_ignore_engine_is_unavailable(tmp_path: Path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    _ignored_tree(src)
+    _ignored_tree(dst)
+    (dst / "keep.txt").write_text("keep\n")
+
+    result = run_bash(
+        f'ttIgnoreEngine() {{ return 1; }}; mirrorDir "{src}" "{dst}"; echo "rc=$?"',
+        tmp_path,
+    )
+
+    assert result.stdout.strip().splitlines()[-1] == "rc=1"
+    # Refused before touching anything.
+    assert (dst / "keep.txt").is_file()
+
+
+def test_sync_dir_to_system_preserves_an_ignored_system_file(tmp_path: Path):
+    store = tmp_path / "store"
+    sysdir = tmp_path / "sys"
+    _ignored_tree(store)
+    _ignored_tree(sysdir)
+    (sysdir / "local.txt").write_text("mine\n")
+    (sysdir / ".gitignore").write_text("cache/\nlocal.txt\n")
+    (store / ".gitignore").write_text("cache/\nlocal.txt\n")
+
+    result = run_bash(f'syncDirToSystem "{store}" "{sysdir}"; echo "rc=$?"', tmp_path)
+
+    assert result.stdout.strip().splitlines()[-1] == "rc=0"
+    assert (sysdir / "local.txt").read_text() == "mine\n"
+    assert (sysdir / "keep.txt").is_file()
+
+
+def test_sync_dir_to_system_still_deletes_visible_extras(tmp_path: Path):
+    store = tmp_path / "store"
+    sysdir = tmp_path / "sys"
+    _ignored_tree(store)
+    _ignored_tree(sysdir)
+    (sysdir / "extra.txt").write_text("extra\n")
+
+    result = run_bash(f'syncDirToSystem "{store}" "{sysdir}"; echo "rc=$?"', tmp_path)
+
+    assert result.stdout.strip().splitlines()[-1] == "rc=0"
+    assert not (sysdir / "extra.txt").exists()
+    assert (sysdir / "keep.txt").is_file()
+
+
+def test_capture_dir_from_system_skips_an_ignored_file(tmp_path: Path):
+    sysdir = tmp_path / "sys"
+    store = tmp_path / "store"
+    _ignored_tree(sysdir)
+    (sysdir / "local.txt").write_text("mine\n")
+    (sysdir / ".gitignore").write_text("cache/\nlocal.txt\n")
+    store.mkdir()
+
+    result = run_bash(
+        f'captureDirFromSystem "{sysdir}" "{store}"; echo "rc=$?"', tmp_path
+    )
+
+    assert result.stdout.strip().splitlines()[-1] == "rc=0"
+    assert (store / "keep.txt").is_file()
+    assert (store / ".gitignore").is_file()
+    assert not (store / "local.txt").exists()
+
+
+def test_tree_hash_ignores_changes_inside_ignored_entries(tmp_path: Path):
+    src = tmp_path / "src"
+    _ignored_tree(src)
+    before = run_bash(f'treeHash "{src}"', tmp_path).stdout.strip()
+    (src / "cache" / "blob").write_text("changed\n")
+    after = run_bash(f'treeHash "{src}"', tmp_path).stdout.strip()
+    assert before == after

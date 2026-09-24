@@ -90,6 +90,51 @@ shellScript;bin/
 - If the target ends with `/`, the file keeps its original name and is placed in that directory.
 - Comparison uses **SHA256 checksums** — if checksums differ, ToolTamer asks what to do.
 
+### Ignoring files inside a tracked directory (`.gitignore` / `.ttignore`)
+
+A tracked directory is mirrored as a whole, but you can carve entries out
+of it. ToolTamer reads `.gitignore` and `.ttignore` files anywhere inside a
+tracked directory — no git repository required — and treats everything they
+match as **invisible**:
+
+- it is not copied into the store when the directory is added,
+- it is not written to the system and not deleted from it on sync,
+- it is not hashed, so changing it does not mark the entry as *modified*.
+
+The matching follows real gitignore rules (`pathspec.GitIgnoreSpec`):
+anchors (`/x`), `**`, `!` negation, trailing-slash directory patterns and
+nested ignore files all work. In each directory `.gitignore` is read first,
+then `.ttignore`, so a later `.ttignore` rule wins and can re-include
+something with `!`. Deeper directories win over shallower ones.
+
+`.gitignore` and `.ttignore` are ordinary files: they are synced along with
+everything else, so after a sync both sides normally hold the same rules.
+
+The **system directory is authoritative** (like the worktree is for git):
+ToolTamer takes the rules from the system copy when it exists, and from the
+store only when there is no system copy yet.
+
+!!! note "New files on the system"
+
+    When you apply (`a`) or capture (`u`) a directory and the system side
+    has files the store does not know, the TUI asks per file whether to
+    **adopt** it (keep it, copy it across) or **ignore** it (write an
+    anchored `/<path>` line into `.ttignore` on both sides). Selected
+    (checked) rows are adopted; ignore them with the space key, `n` for all,
+    `a` to adopt all, Esc cancels the whole sync. Previously those files
+    were silently deleted (apply) or silently absorbed (capture).
+
+    The scripted sync (`tt --syncFilesOnly`, and the whole "Update System"
+    run) has no dialog — it just honours the ignore rules that are already
+    there. Ignore patterns are computed by one engine
+    (`tui/core/ignore.py`, exposed to the Bash mirror as
+    `python3 -m tui.ttignore`), so the TUI and the CLI always agree.
+
+    This needs `pathspec`. In the normal `.venv` setup it is installed
+    already. If a tracked directory carries ignore files but no usable
+    engine is available, ToolTamer refuses that directory's mirror rather
+    than mirroring without the filter — nothing gets deleted.
+
 ### Git repositories
 
 > **Update ToolTamer on every machine before you create your first repo

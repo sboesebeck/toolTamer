@@ -13,6 +13,11 @@ ERR=$RD
 WR=$YL
 export BASE=$HOME/.config/toolTamer/
 
+# Repository root, derived from this file's own location. The ignore rules
+# live in Python (tui/core/ignore.py, reached via tui/ttignore.py); Bash
+# calls that one engine rather than re-implementing gitignore semantics.
+TT_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 if command -v fzf >/dev/null 2>&1; then
   HAVE_FZF=1
 else
@@ -115,13 +120,83 @@ function createEffectiveFilesList() {
   done
 }
 
+# --- ignore rules (.gitignore / .ttignore) ----------------------------
+#
+# A tracked directory may carry gitignore-style rules. Bash never grows a
+# second matcher: candidate paths are piped through tui/ttignore.py, the CLI
+# around tui/core/ignore.py, so the TUI and the mirror agree on the visible
+# set. Every function below has a fast path for the common case of no ignore
+# file anywhere: it behaves exactly as before and never shells out to Python.
+
+# True when $1 holds a .gitignore or .ttignore anywhere in its tree. This is
+# the switch between the old rsync/find behaviour and the ignore-aware one.
+function ttHasIgnoreFiles() {
+  [ -d "$1" ] || return 1
+  [ -n "$(find "$1" \( -name .gitignore -o -name .ttignore \) -print -quit 2>/dev/null)" ]
+}
+
+# Print a Python interpreter that can `import pathspec`, or nothing. Prefers
+# the repo venv, falls back to python3. Empty result means the ignore engine
+# is unavailable and a mirror must be refused rather than run unfiltered.
+function ttIgnoreEngine() {
+  local cand
+  for cand in "$TT_REPO_ROOT/.venv/bin/python3" "python3"; do
+    [ -n "$cand" ] || continue
+    if command -v "$cand" >/dev/null 2>&1 &&
+      PYTHONPATH="$TT_REPO_ROOT" "$cand" -c 'import pathspec' >/dev/null 2>&1; then
+      command -v "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Filter rel paths from stdin through the ignore rules of $1 (a tree root).
+function ttIgnoreFilter() {
+  local rules="$1" py
+  py=$(ttIgnoreEngine) || return 1
+  PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.ttignore filter "$rules"
+}
+
+# Exit 0 when every non-ignored file/dir under $1 can be enumerated, using
+# the rules of $2. Refuses (nonzero) when no engine is available.
+function ttIgnoreCheckReadable() {
+  local tree="$1" rules="$2" py
+  py=$(ttIgnoreEngine) || return 1
+  PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.ttignore check-readable "$tree" "$rules"
+}
+
 # Content hash of a directory tree (all regular files + symlinks, path-stable).
 # Prints "missing" for non-directories so comparisons always differ.
+# $2 is the rules root: when it carries ignore files, hashing is done over
+# the same visible set the mirror would use (rules from that root).
 function treeHash() {
   local dir="$1"
+  local rules="${2:-$1}"
   if [ ! -d "$dir" ]; then
     echo "missing"
     return 1
+  fi
+  if ttHasIgnoreFiles "$rules"; then
+    local py
+    if ! py=$(ttIgnoreEngine); then
+      echo "no-ignore-engine"
+      return 1
+    fi
+    (
+      cd "$dir" || exit 1
+      find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||' |
+        PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.ttignore filter "$rules" |
+        LC_ALL=C sort | while IFS= read -r f; do
+          [ -z "$f" ] && continue
+          if [ -L "$f" ]; then
+            printf 'link %s -> %s\n' "$f" "$(readlink "$f")"
+          else
+            printf '%s %s\n' "$(shasum <"$f" | cut -f1 -d' ')" "$f"
+          fi
+        done
+    ) | shasum | cut -f1 -d' '
+    return
   fi
   (
     cd "$dir" || exit 1
@@ -137,10 +212,29 @@ function treeHash() {
 
 # Print relative paths that exist in $2 (dest) but not in $1 (src) —
 # the files a mirror operation would delete on the destination.
+# $3 is the rules root (defaults to $1): with ignore files present, ignored
+# destination files are not reported as extras (they must survive).
 function listDirExtras() {
   local src="$1"
   local dst="$2"
+  local rules="${3:-$1}"
   [ -d "$dst" ] || return 0
+  if ttHasIgnoreFiles "$rules"; then
+    local py
+    if ! py=$(ttIgnoreEngine); then
+      return 1
+    fi
+    local tmp_src tmp_dst
+    tmp_src=$(mktemp)
+    tmp_dst=$(mktemp)
+    (cd "$src" 2>/dev/null && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') |
+      PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.ttignore filter "$rules" | LC_ALL=C sort -u >"$tmp_src"
+    (cd "$dst" && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') |
+      PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.ttignore filter "$rules" | LC_ALL=C sort -u >"$tmp_dst"
+    comm -23 "$tmp_dst" "$tmp_src"
+    rm -f "$tmp_src" "$tmp_dst"
+    return 0
+  fi
   (cd "$dst" && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') | while IFS= read -r f; do
     [ -z "$f" ] && continue
     if [ ! -e "$src/$f" ] && [ ! -L "$src/$f" ]; then
@@ -159,9 +253,18 @@ function listDirExtras() {
 # (syncDirToSystem, captureDirFromSystem) all use this one predicate so
 # a bad subdirectory is reported once, as a clean skip, rather than
 # falling through to a confusing partial failure further down.
+#
+# $2 is the rules root (defaults to $1). With ignore files, an ignored
+# unreadable directory is pruned instead of failing the check; an engine
+# that is missing means we cannot tell, so the check refuses (1).
 function dirFullyReadable() {
   local dir="$1"
+  local rules="${2:-$1}"
   [ -r "$dir" ] && [ -x "$dir" ] || return 1
+  if ttHasIgnoreFiles "$rules"; then
+    ttIgnoreCheckReadable "$dir" "$rules"
+    return $?
+  fi
   local enum_err
   enum_err=$(cd "$dir" && find . \( -type f -o -type l \) 2>&1 >/dev/null)
   [ -z "$enum_err" ]
@@ -169,6 +272,10 @@ function dirFullyReadable() {
 
 # Mirror directory $1 into $2: full copy including deletion of files that
 # are not present in the source. Uses rsync when available.
+#
+# $3 is the rules root (defaults to $1). With ignore files, rsync is dropped
+# in favour of the filtered find lists, so the deletion pass removes only
+# non-ignored extras and only visible source files are copied.
 #
 # Refuses to run at all when $1 cannot be fully read (see
 # dirFullyReadable): the manual fallback below builds its file list from
@@ -179,12 +286,49 @@ function dirFullyReadable() {
 function mirrorDir() {
   local src="$1"
   local dst="$2"
-  if ! dirFullyReadable "$src"; then
+  local rules="${3:-$1}"
+  if ! dirFullyReadable "$src" "$rules"; then
     warn "$src could not be fully read - refusing to mirror (would empty $dst)"
     return 1
   fi
 
   mkdir -p "$dst" || return 1
+
+  if ttHasIgnoreFiles "$rules"; then
+    local py
+    if ! py=$(ttIgnoreEngine); then
+      warn "ignore rules present but the tui.ttignore engine is unavailable - refusing to mirror $src -> $dst"
+      return 1
+    fi
+    local tmp_src tmp_dst
+    tmp_src=$(mktemp)
+    tmp_dst=$(mktemp)
+    (cd "$src" && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') |
+      PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.ttignore filter "$rules" | LC_ALL=C sort -u >"$tmp_src"
+    (cd "$dst" && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') |
+      PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.ttignore filter "$rules" | LC_ALL=C sort -u >"$tmp_dst"
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      mkdir -p "$dst/$(dirname "$f")"
+      if [ -d "$dst/$f" ] && [ ! -L "$dst/$f" ]; then
+        rm -rf "$dst/$f"
+      elif [ -L "$dst/$f" ] || [ -e "$dst/$f" ]; then
+        rm -f "$dst/$f"
+      fi
+      if [ -L "$src/$f" ]; then
+        ln -sfn "$(readlink "$src/$f")" "$dst/$f"
+      else
+        cp -p "$src/$f" "$dst/$f"
+      fi
+    done <"$tmp_src"
+    comm -23 "$tmp_dst" "$tmp_src" | while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      rm -f "$dst/$f"
+    done
+    rm -f "$tmp_src" "$tmp_dst"
+    return 0
+  fi
+
   if command -v rsync >/dev/null 2>&1; then
     if rsync -a --delete "$src/" "$dst/"; then
       return 0
@@ -217,11 +361,21 @@ function mirrorDir() {
 function syncDirToSystem() {
   local gitdir="$1"
   local sysdir="$2"
+  # Rules come from the system side (the worktree) when it exists, matching
+  # the TUI and the ".gitignore lives in the worktree" model; else the store.
+  local rules="$gitdir"
+  [ -d "$sysdir" ] && rules="$sysdir"
   logn "Comparing dir ${GN}$sysdir${RESET} <-> ${BL}${gitdir##$BASE/configs/}${RESET}....."
-  if ! dirFullyReadable "$gitdir"; then
+  if ! dirFullyReadable "$gitdir" "$rules"; then
     log "${RD}not readable${RESET} - skipped"
     warn "$gitdir could not be fully read - $sysdir left untouched"
     note "Skipped directory sync (unreadable source)" "$sysdir"
+    return
+  fi
+  if ttHasIgnoreFiles "$rules" && ! ttIgnoreEngine >/dev/null; then
+    log "${RD}ignore engine unavailable${RESET} - skipped"
+    warn "$rules has ignore rules but the tui.ttignore engine is unavailable - $sysdir left untouched"
+    note "Skipped directory sync (no ignore engine)" "$sysdir"
     return
   fi
   if [ -e "$sysdir" ] && [ ! -d "$sysdir" ]; then
@@ -229,7 +383,7 @@ function syncDirToSystem() {
     rm -rf "$sysdir.ttbak"
     mv "$sysdir" "$sysdir.ttbak"
   fi
-  if [ -d "$sysdir" ] && [ "$(treeHash "$gitdir")" = "$(treeHash "$sysdir")" ]; then
+  if [ -d "$sysdir" ] && [ "$(treeHash "$gitdir" "$rules")" = "$(treeHash "$sysdir" "$rules")" ]; then
     log "${GN}Ok${RESET}"
     return
   fi
@@ -240,9 +394,9 @@ function syncDirToSystem() {
     log "  ${RD}deleting$RESET $sysdir/$extra (not in ToolTamer)"
     logf "dir-sync: deleted $sysdir/$extra"
     note "Deleted file (dir sync)" "$sysdir/$extra"
-  done < <(listDirExtras "$gitdir" "$sysdir")
+  done < <(listDirExtras "$gitdir" "$sysdir" "$rules")
   mkdir -p "$(dirname "$sysdir")"
-  if mirrorDir "$gitdir" "$sysdir"; then
+  if mirrorDir "$gitdir" "$sysdir" "$rules"; then
     note "Updated directory" "$sysdir"
   else
     err "Directory sync failed for $sysdir"
@@ -260,24 +414,32 @@ function captureDirFromSystem() {
     captureRepoFromSystem "$sysdir" "$gitdir"
     return $?
   fi
-  if ! dirFullyReadable "$sysdir"; then
+  # Rules come from the system source (the worktree).
+  local rules="$sysdir"
+  [ -d "$sysdir" ] || rules="$gitdir"
+  if ! dirFullyReadable "$sysdir" "$rules"; then
     warn "$sysdir could not be fully read - $gitdir left untouched"
     note "Skipped directory capture (unreadable source)" "$sysdir"
+    return 2
+  fi
+  if ttHasIgnoreFiles "$rules" && ! ttIgnoreEngine >/dev/null; then
+    warn "$rules has ignore rules but the tui.ttignore engine is unavailable - $gitdir left untouched"
+    note "Skipped directory capture (no ignore engine)" "$sysdir"
     return 2
   fi
   if [ -e "$gitdir" ] && [ ! -d "$gitdir" ]; then
     rm -f "$gitdir"
   fi
-  if [ -d "$gitdir" ] && [ "$(treeHash "$sysdir")" = "$(treeHash "$gitdir")" ]; then
+  if [ -d "$gitdir" ] && [ "$(treeHash "$sysdir" "$rules")" = "$(treeHash "$gitdir" "$rules")" ]; then
     return 1
   fi
   local extra
   while IFS= read -r extra; do
     [ -z "$extra" ] && continue
     logf "capture: removed ${gitdir##$BASE/configs/}/$extra (deleted on system)"
-  done < <(listDirExtras "$sysdir" "$gitdir")
+  done < <(listDirExtras "$sysdir" "$gitdir" "$rules")
   mkdir -p "$(dirname "$gitdir")"
-  mirrorDir "$sysdir" "$gitdir" || {
+  mirrorDir "$sysdir" "$gitdir" "$rules" || {
     err "Capture failed for $sysdir"
     return 2
   }
