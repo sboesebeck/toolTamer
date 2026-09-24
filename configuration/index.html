@@ -457,6 +457,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#ignoring-files-inside-a-tracked-directory-gitignore-ttignore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ignoring files inside a tracked directory (.gitignore / .ttignore)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#git-repositories" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -645,6 +656,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#ignoring-files-inside-a-tracked-directory-gitignore-ttignore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ignoring files inside a tracked directory (.gitignore / .ttignore)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#git-repositories" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -811,6 +833,45 @@ and is then kept.</p>
 <li>If the target ends with <code>/</code>, the file keeps its original name and is placed in that directory.</li>
 <li>Comparison uses <strong>SHA256 checksums</strong> — if checksums differ, ToolTamer asks what to do.</li>
 </ul>
+<h3 id="ignoring-files-inside-a-tracked-directory-gitignore-ttignore">Ignoring files inside a tracked directory (<code>.gitignore</code> / <code>.ttignore</code>)<a class="headerlink" href="#ignoring-files-inside-a-tracked-directory-gitignore-ttignore" title="Permanent link">&para;</a></h3>
+<p>A tracked directory is mirrored as a whole, but you can carve entries out
+of it. ToolTamer reads <code>.gitignore</code> and <code>.ttignore</code> files anywhere inside a
+tracked directory — no git repository required — and treats everything they
+match as <strong>invisible</strong>:</p>
+<ul>
+<li>it is not copied into the store when the directory is added,</li>
+<li>it is not written to the system and not deleted from it on sync,</li>
+<li>it is not hashed, so changing it does not mark the entry as <em>modified</em>.</li>
+</ul>
+<p>The matching follows real gitignore rules (<code>pathspec.GitIgnoreSpec</code>):
+anchors (<code>/x</code>), <code>**</code>, <code>!</code> negation, trailing-slash directory patterns and
+nested ignore files all work. In each directory <code>.gitignore</code> is read first,
+then <code>.ttignore</code>, so a later <code>.ttignore</code> rule wins and can re-include
+something with <code>!</code>. Deeper directories win over shallower ones.</p>
+<p><code>.gitignore</code> and <code>.ttignore</code> are ordinary files: they are synced along with
+everything else, so after a sync both sides normally hold the same rules.</p>
+<p>The <strong>system directory is authoritative</strong> (like the worktree is for git):
+ToolTamer takes the rules from the system copy when it exists, and from the
+store only when there is no system copy yet.</p>
+<div class="admonition note">
+<p class="admonition-title">New files on the system</p>
+<p>When you apply (<code>a</code>) or capture (<code>u</code>) a directory and the system side
+has files the store does not know, the TUI asks per file whether to
+<strong>adopt</strong> it (keep it, copy it across) or <strong>ignore</strong> it (write an
+anchored <code>/&lt;path&gt;</code> line into <code>.ttignore</code> on both sides). Selected
+(checked) rows are adopted; ignore them with the space key, <code>n</code> for all,
+<code>a</code> to adopt all, Esc cancels the whole sync. Previously those files
+were silently deleted (apply) or silently absorbed (capture).</p>
+<p>The scripted sync (<code>tt --syncFilesOnly</code>, and the whole "Update System"
+run) has no dialog — it just honours the ignore rules that are already
+there. Ignore patterns are computed by one engine
+(<code>tui/core/ignore.py</code>, exposed to the Bash mirror as
+<code>python3 -m tui.ttignore</code>), so the TUI and the CLI always agree.</p>
+<p>This needs <code>pathspec</code>. In the normal <code>.venv</code> setup it is installed
+already. If a tracked directory carries ignore files but no usable
+engine is available, ToolTamer refuses that directory's mirror rather
+than mirroring without the filter — nothing gets deleted.</p>
+</div>
 <h3 id="git-repositories">Git repositories<a class="headerlink" href="#git-repositories" title="Permanent link">&para;</a></h3>
 <blockquote>
 <p><strong>Update ToolTamer on every machine before you create your first repo
