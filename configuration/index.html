@@ -971,6 +971,17 @@ there. Ignore patterns are computed by one engine
 press <strong><code>i</code></strong> on a tracked directory and pick files from the list. They
 get an anchored rule on both sides and drop out of the sync — the
 counterpart of <strong><code>s</code></strong>, which encrypts instead of hiding.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">A <code>.gitignore</code> inside a tracked directory belongs to git</p>
+<p>The store is itself a git repository, so a file literally named
+<code>.gitignore</code> inside a tracked directory is read by the store's git as an
+ignore file. One that lists itself (opencode's does) is then ignored and
+<strong>never committed</strong> — other machines see it as missing and would delete
+it. <code>.ttignore</code> is not affected and is the right place for rules. Use
+<code>tt --check-files</code> (also run automatically before a file sync) to spot
+this; the fix is to drop the self-ignore / the <code>!/.gitignore</code> re-include,
+or to force-add the file (<code>git add -f</code>).</p>
 <p>This needs <code>pathspec</code>. In the normal <code>.venv</code> setup it is installed
 already. If a tracked directory carries ignore files but no usable
 engine is available, ToolTamer refuses that directory's mirror rather
