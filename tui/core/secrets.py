@@ -32,6 +32,7 @@ through the repo. See the design doc
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -569,3 +570,26 @@ class SecretStore:
                 return decrypt_bytes(identity, src)
             finally:
                 shutil.rmtree(identity.parent, ignore_errors=True)
+
+
+def secret_file_status(
+    store: "SecretStore", scope: str, store_path: Path, system_path: Path
+) -> str:
+    """ok | modified | missing_system | missing_repo for one secret file.
+
+    Compares the *decrypted* plaintext with the system file; age output is
+    non-deterministic, so a ciphertext comparison would always differ. Shared
+    by the file manager and the dashboard so both agree."""
+    if not store_path.exists():
+        return "missing_repo"
+    if not system_path.exists():
+        return "missing_system"
+    try:
+        data = store.read_secret(scope, store_path)
+    except SecretsError:
+        # No key yet / undecryptable: surface as missing rather than claiming
+        # a sync we cannot verify.
+        return "missing_repo"
+    if hashlib.sha1(data).hexdigest() == hashlib.sha1(system_path.read_bytes()).hexdigest():
+        return "ok"
+    return "modified"

@@ -435,3 +435,43 @@ def test_tracked_dir_with_ignore_rules_is_not_reported_changed(
     text = _file_count_text(status_bar)
     assert "all synced" in text, text
     assert "changed" not in text, text
+
+
+@pytest.mark.skipif(
+    __import__("tui.core.secrets", fromlist=["age_binary"]).age_binary() is None,
+    reason="age is not installed",
+)
+def test_scan_status_counts_modified_secret(tmp_config: Path, tmp_path: Path, monkeypatch):
+    """A secret entry (secrets.conf) whose system file differs must show as
+    changed on the dashboard. It used to be ignored entirely — only
+    files.conf was scanned — so the dashboard said "all synced" while the
+    file manager correctly showed the secret differing."""
+    from tui.core.secrets import SecretStore
+
+    host = "testhost"
+    (tmp_config / "configs" / "common" / "secrets.conf").write_text("tok;.config/tok\n")
+    store = SecretStore(tmp_config, host)
+    store.init_personal_key()
+    store.ensure_admin_key()
+    store.create_scope("common", [host])
+    store_path = tmp_config / "configs" / "common" / "files" / "tok"
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    plain = tmp_path / "plain"
+    plain.write_text("STORE-VERSION\n")
+    store.encrypt_to_scope("common", plain, store_path)
+
+    home = tmp_path / "home"
+    (home / ".config").mkdir(parents=True)
+    (home / ".config" / "tok").write_text("SYSTEM-VERSION\n")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+    status_bar = _make_status_bar(tmp_config, monkeypatch)
+    monkeypatch.setattr(SystemInfo, "list_dependency_packages", lambda self: set())
+    monkeypatch.setattr(
+        "tui.widgets.status_bar.get_current_worker",
+        lambda: MagicMock(is_cancelled=False),
+    )
+    StatusBar._scan_status.__wrapped__(status_bar)
+
+    text = _file_count_text(status_bar)
+    assert "changed" in text, text

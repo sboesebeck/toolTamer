@@ -152,6 +152,9 @@ Options
   --secrets CMD     Manage encrypted secret entries and their scope keys.
                     Commands: init, join, status, check, migrate, rotate,
                     encrypt, decrypt. Run 'tt --secrets' with no CMD for usage.
+  --check-files     Report visible tracked files the store git repo refuses to
+                    commit (e.g. a self-ignoring .gitignore in a tracked dir),
+                    which would read as changed/missing on other machines.
   -h, --help        Show this help text and exit.
 
 --fix-taps and --cleanup-deps pass any further arguments through, e.g.
@@ -590,6 +593,7 @@ function syncInstall() {
 
 function syncTTtoSystemFiles() {
   log "Updating local files from TT."
+  ttStoreGitWarn
   createEffectiveFilesList $TMP/to_copy.lst 1
   #echo >$TMP/to_copy.lst
 
@@ -628,6 +632,7 @@ function syncTTtoSystemFiles() {
 
 function updatingTTFromSystemFiles() {
   log "Updating ToolTamer files from this system."
+  ttStoreGitWarn
   createEffectiveFilesList $TMP/to_copy.lst 1
   local updated=0
   local skipped=0
@@ -950,6 +955,11 @@ if [ $# -gt 0 ]; then
   --secrets | secrets)
     shift
     run_python_tool tui.secrets "$@"
+    exit $?
+    ;;
+  --check-files)
+    shift
+    run_python_tool tui.store_check "$@"
     exit $?
     ;;
   -h | --help)
