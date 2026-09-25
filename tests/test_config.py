@@ -671,3 +671,36 @@ def test_mirror_tree_removes_visible_destination_extras(tmp_path: Path):
 
     assert not (dst / "stale.txt").exists()
     assert (dst / "keep.txt").read_text() == "keep\n"
+
+
+def test_host_directory_supersedes_inherited_entries_inside_it(tmp_path: Path):
+    """A directory mapping in a more specific config drops entries inherited
+    from an earlier config that lie inside it (its own config's entries stay,
+    so the tracked-dir + inner-secret carve-out keeps working)."""
+    base = tmp_path / "toolTamer"
+    common = base / "configs" / "common"
+    host = base / "configs" / "caluga"
+    common.mkdir(parents=True)
+    host.mkdir(parents=True)
+    (common / "files").mkdir()
+    (common / "files.conf").write_text("")
+    (host / "files").mkdir()
+    (host / "files" / "ssh").mkdir(parents=True)
+    (host / "files.conf").write_text("ssh;.ssh\n")
+    (host / "includes.conf").write_text("")
+    (common / "secrets.conf").write_text(
+        "ssh/id_rsa;.ssh/\n"
+        "other/token;.other/token\n"
+    )
+    (host / "secrets.conf").write_text("ssh/config;.ssh/\n")
+
+    cfg = TTConfig(base)
+    secrets = {m.effective_target: m for m in cfg.get_effective_secrets("caluga")}
+    # common's key inside ~/.ssh is dropped by the host's ~/.ssh directory...
+    assert secrets[".ssh/id_rsa"].is_effective is False
+    assert secrets[".ssh/id_rsa"].shadowed_by == "caluga"
+    # ...its own carve-out secret inside the same directory survives...
+    assert secrets[".ssh/config"].is_effective is True
+    assert secrets[".ssh/config"].config == "caluga"
+    # ...and an unrelated inherited secret is untouched.
+    assert secrets[".other/token"].is_effective is True
