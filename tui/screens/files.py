@@ -98,6 +98,7 @@ class FileScreen(Screen):
         ("n", "add_file", "Add File"),
         ("g", "convert_to_repo", "To repo"),
         ("s", "make_secret", "Encrypt"),
+        ("i", "ignore_files", "Ignore"),
         ("v", "view_file", "View"),
         ("slash", "focus_search", "Search"),
         ("tab", "switch_pane", "Switch Pane"),
@@ -157,6 +158,7 @@ class FileScreen(Screen):
         log.write(Text("  n  Add new file or directory to TT", style="dim"))
         log.write(Text("  v  View file contents (decrypted for secrets)", style="dim"))
         log.write(Text("  s  Encrypt entry (on a directory: pick files inside)", style="dim"))
+        log.write(Text("  i  Ignore files inside a tracked directory", style="dim"))
         log.write(Text("  /  Filter files", style="dim"))
         log.write(Text("  Esc  Back", style="dim"))
 
@@ -1379,10 +1381,12 @@ class FileScreen(Screen):
         )
         self._refresh_files()
 
-    def _pick_inner_secrets(self, config: str, stored: str, target: str) -> None:
-        """Offer the visible files of a tracked directory to encrypt, one by
-        one. Only regular files (never ignore files) are candidates; already
-        encrypted ones are left out."""
+    def _inner_candidates(
+        self, config: str, stored: str, target: str
+    ) -> tuple[str, Path, Path, list[str]]:
+        """(dir_eff, sys_dir, store_dir, visible_rel_paths) for a tracked
+        directory. Only regular files are listed — never ignore files, never
+        something already encrypted (that is a different entry now)."""
         from tui.core.config import _resolve_effective_target
         from tui.core.ignore import IGNORE_FILENAMES
 
@@ -1400,6 +1404,14 @@ class FileScreen(Screen):
             if self._tt_config.is_secret(config, f"{stored}/{rel}", f"{dir_eff}/{rel}"):
                 continue
             candidates.append(rel)
+        return dir_eff, sys_dir, store_dir, candidates
+
+    def _pick_inner_secrets(self, config: str, stored: str, target: str) -> None:
+        """Offer the visible files of a tracked directory to encrypt, one by
+        one."""
+        dir_eff, _sys_dir, _store_dir, candidates = self._inner_candidates(
+            config, stored, target
+        )
         if not candidates:
             self.notify(
                 f"No plaintext files left to encrypt in ~/{dir_eff}.",
@@ -1439,6 +1451,66 @@ class FileScreen(Screen):
             )
         for err in errors[:3]:
             self.notify(f"Failed {err}", severity="error", timeout=8)
+        self._refresh_files()
+
+    def action_ignore_files(self) -> None:
+        """Ignore selected files inside the highlighted tracked directory.
+
+        Same mechanism the new-file review uses: an anchored `.ttignore` line
+        on both sides makes the entries invisible to the mirror (never
+        stored, written, deleted or hashed) — the opposite of `s`, which
+        encrypts instead of hiding."""
+        sel = self._get_selected()
+        if not sel:
+            return
+        config, stored, target = sel
+        repo_file = self._tt_config.configs_dir / config / "files" / stored
+        if not repo_file.is_dir() or repo_file.is_symlink():
+            self.notify(
+                "Ignoring individual files works on a tracked directory.",
+                severity="warning", timeout=8,
+            )
+            return
+        if repo_mod.read_marker(repo_file) is not None:
+            self.notify(
+                "Repo entries are governed by their own .gitignore.",
+                severity="warning", timeout=8,
+            )
+            return
+        dir_eff, _sys_dir, _store_dir, candidates = self._inner_candidates(
+            config, stored, target
+        )
+        if not candidates:
+            self.notify(
+                f"No visible files to ignore in ~/{dir_eff}.",
+                severity="information", timeout=8,
+            )
+            return
+        self.app.push_screen(
+            SelectSecretFilesScreen(
+                f"Ignore files inside ~/{dir_eff}  ({config})",
+                candidates, verb="ignore",
+            ),
+            callback=lambda chosen: self._apply_ignore_files(
+                config, stored, dir_eff, chosen
+            ),
+        )
+
+    def _apply_ignore_files(
+        self, config: str, stored: str, dir_eff: str, chosen: "list[str] | None"
+    ) -> None:
+        if not chosen:
+            return
+        store_dir = self._tt_config.configs_dir / config / "files" / stored
+        sys_dir = Path.home() / dir_eff
+        for rel in chosen:
+            append_ignore(store_dir, rel, is_dir=False)
+            if sys_dir.is_dir():
+                append_ignore(sys_dir, rel, is_dir=False)
+        self.notify(
+            f"Ignored {len(chosen)} file(s) inside ~/{dir_eff} (no longer synced).",
+            severity="information", timeout=8,
+        )
         self._refresh_files()
 
     def action_view_file(self) -> None:
@@ -1772,11 +1844,11 @@ class FileScreen(Screen):
 
 
 class SelectSecretFilesScreen(ModalScreen["list[str] | None"]):
-    """Pick which files of a tracked directory to encrypt individually.
+    """Pick files of a tracked directory to encrypt *or* to ignore.
 
-    Selected entries become inner secrets (carved out of the directory
-    mirror); unselected stay plaintext. Returns the chosen rel paths on
-    confirm, None on Esc."""
+    Selected entries are acted on by the caller (carve-out encryption, or an
+    anchored `.ttignore` rule); unselected stay as they are. Returns the
+    chosen rel paths on confirm, None on Esc."""
 
     # Priority bindings: SelectionList would otherwise eat the plain keys
     # for its own type-ahead.
@@ -1784,7 +1856,7 @@ class SelectSecretFilesScreen(ModalScreen["list[str] | None"]):
         Binding("escape", "cancel", "Cancel", priority=True),
         Binding("a", "select_all", "All", priority=True),
         Binding("n", "select_none", "None", priority=True),
-        Binding("enter", "confirm", "Encrypt", priority=True),
+        Binding("enter", "confirm", "Confirm", priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -1806,28 +1878,35 @@ class SelectSecretFilesScreen(ModalScreen["list[str] | None"]):
     }
     """
 
-    def __init__(self, header: str, files: list[str]):
+    def __init__(self, header: str, files: list[str], verb: str = "encrypt"):
         super().__init__()
         self._header = header
         self._files = files
+        self._verb = verb
 
     def compose(self) -> ComposeResult:
+        if self._verb == "ignore":
+            intro = (
+                f"{len(self._files)} file(s) — selected = ignore (hidden from "
+                f"sync), unselected = keep tracked:"
+            )
+            footer = "Space=toggle  a=all  n=none  Enter=ignore  Esc=cancel"
+        else:
+            intro = (
+                f"{len(self._files)} file(s) — selected = encrypt, "
+                f"unselected = leave plain:"
+            )
+            footer = "Space=toggle  a=all  n=none  Enter=encrypt  Esc=cancel"
         with Container(id="select-secret-dialog"):
             yield Label(Text(self._header, style="bold cyan"))
             yield Label(Text(""))
-            yield Label(Text(
-                f"{len(self._files)} file(s) — selected = encrypt, unselected = leave plain:",
-                style="bold",
-            ))
+            yield Label(Text(intro, style="bold"))
             yield SelectionList(
                 *[Selection(f, value=f, initial_state=False) for f in self._files],
                 id="select-secret-list",
             )
             yield Label(Text(""))
-            yield Label(Text(
-                "Space=toggle  a=all  n=none  Enter=encrypt  Esc=cancel",
-                style="dim",
-            ))
+            yield Label(Text(footer, style="dim"))
 
     def action_select_all(self) -> None:
         self.query_one("#select-secret-list", SelectionList).select_all()

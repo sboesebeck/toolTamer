@@ -1606,3 +1606,24 @@ async def test_select_secret_files_screen_lists_candidates():
         sl = screen.query_one("#select-secret-list", SelectionList)
         assert sl.option_count == 2
         assert list(sl.selected) == []
+
+
+def test_apply_ignore_files_writes_rules_on_both_sides(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    """`i` on a directory: ignored inner files get an anchored .ttignore rule
+    in the store *and* the system dir, so the mirror skips them."""
+    store = tmp_config / "configs" / "common" / "files" / "app"
+    store.mkdir(parents=True)
+    (tmp_config / "configs" / "common" / "files.conf").write_text("app;.config/app\n")
+    home = tmp_path / "home"
+    sys_dir = home / ".config" / "app"
+    sys_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    notes: list[str] = []
+    screen = _bare_screen(tmp_config, notes)
+    screen._apply_ignore_files("common", "app", ".config/app", ["cache.db"])
+
+    assert (store / ".ttignore").read_text().strip() == "/cache.db"
+    assert (sys_dir / ".ttignore").read_text().strip() == "/cache.db"

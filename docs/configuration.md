@@ -130,6 +130,11 @@ store only when there is no system copy yet.
     (`tui/core/ignore.py`, exposed to the Bash mirror as
     `python3 -m tui.ttignore`), so the TUI and the CLI always agree.
 
+    You can also ignore existing files on purpose: in the file manager,
+    press **`i`** on a tracked directory and pick files from the list. They
+    get an anchored rule on both sides and drop out of the sync — the
+    counterpart of **`s`**, which encrypts instead of hiding.
+
     This needs `pathspec`. In the normal `.venv` setup it is installed
     already. If a tracked directory carries ignore files but no usable
     engine is available, ToolTamer refuses that directory's mirror rather
