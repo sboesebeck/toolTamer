@@ -967,6 +967,10 @@ run) has no dialog — it just honours the ignore rules that are already
 there. Ignore patterns are computed by one engine
 (<code>tui/core/ignore.py</code>, exposed to the Bash mirror as
 <code>python3 -m tui.ttignore</code>), so the TUI and the CLI always agree.</p>
+<p>You can also ignore existing files on purpose: in the file manager,
+press <strong><code>i</code></strong> on a tracked directory and pick files from the list. They
+get an anchored rule on both sides and drop out of the sync — the
+counterpart of <strong><code>s</code></strong>, which encrypts instead of hiding.</p>
 <p>This needs <code>pathspec</code>. In the normal <code>.venv</code> setup it is installed
 already. If a tracked directory carries ignore files but no usable
 engine is available, ToolTamer refuses that directory's mirror rather
