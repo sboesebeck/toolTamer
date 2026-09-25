@@ -1539,3 +1539,26 @@ def test_after_capture_review_override_writes_rules_to_the_host_store(
     assert "/fresh.txt" in (sys_dir / ".ttignore").read_text()
     assert "/fresh.txt" in (host_store / ".ttignore").read_text()
     assert not (parent_store / ".ttignore").exists()
+
+
+def test_secret_entry_appears_as_a_locked_row(tmp_config: Path, tmp_path: Path, monkeypatch):
+    """A secrets.conf entry must show up in the file list (with a lock
+    token and a 'secret' filter keyword) instead of being invisible."""
+    host = "testhost"
+    (tmp_config / "configs" / host / "secrets.conf").write_text("tok;.config/tok\n")
+    (tmp_config / "configs" / host / "files" / "tok").write_bytes(
+        b"age-encryption.org/v1\n"
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+    system = SystemInfo()
+    monkeypatch.setattr(system, "hostname", host, raising=False)
+    screen = FileScreen(TTConfig(tmp_config), system)
+    rows = screen._build_rows()
+
+    secret_rows = [r for r in rows if r[0].startswith("secret ")]
+    assert len(secret_rows) == 1
+    assert secret_rows[0][1].plain == "S"
+    assert "~/.config/tok" in secret_rows[0][2].plain

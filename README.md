@@ -19,6 +19,7 @@ It comes as a Bash sync engine (`bin/`) plus an interactive TUI and helper tools
 - **Configuration Synchronization**: Manages dotfiles and configuration files, synchronizing them across systems based on checksum comparisons.
 - **Cross-Platform Support**: Works seamlessly on both Linux and macOS systems. (not heavily tested yet) 
 - **Modular Configurations**: it is designed to use git to store your configurations and make them available on all systems 
+- **Encrypted secrets**: ssh keys, tokens and other secret files are stored in the shared repo as age ciphertext and only readable by the machines entitled to them (per-scope keys, no private key ever copied between machines).
 - **Easy Setup**: If no configuration is present, ToolTamer prompts for a Git repository to check out the configuration.
 - **Interactive TUI**: a full-screen interface for browsing packages and files, with diffs, bulk actions and inline install/uninstall.
 - **Dependency-aware**: never removes a package another installed package still needs — the check is real (not a name heuristic) and cached, so it stays fast.
@@ -121,6 +122,8 @@ tt --syncFilesOnly    # only files
 tt --updateToolTamer  # snapshot installed packages into the config
 tt --fix-taps         # qualify tap packages (see to_install.XXX below)
 tt --cleanup-deps     # drop packages that are only there as dependencies
+tt --secrets init     # set up this machine's key for encrypted secrets
+tt --secrets migrate  # move plaintext files into encrypted storage (--apply)
 tt -h
 ```
 

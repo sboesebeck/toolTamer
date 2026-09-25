@@ -149,6 +149,9 @@ Options
   --warm-deps       Pre-compute the reverse-dependency data a sync needs into the
                     shared cache, in parallel. --syncSys does this by itself; run it
                     separately to pay the cost ahead of time.
+  --secrets CMD     Manage encrypted secret entries and their scope keys.
+                    Commands: init, join, status, check, migrate, rotate,
+                    encrypt, decrypt. Run 'tt --secrets' with no CMD for usage.
   -h, --help        Show this help text and exit.
 
 --fix-taps and --cleanup-deps pass any further arguments through, e.g.
@@ -279,6 +282,7 @@ function syncFile() {
   fi
   dotfile="$1"
   gitfile="$2"
+  secret_scope="$3"
 
   if [ "q$dotfile" = "q" ] || [ "q$gitfile" = "q" ]; then
     logf "Cannot sync '$dotfile' to '$gitfile'"
@@ -302,10 +306,23 @@ function syncFile() {
     mv "$dotfile" "$dotfile.ttbak"
   fi
 
+  # A secret entry is stored as ciphertext; comparisons and the copy must be
+  # done on the decrypted plaintext. Decrypt to a scratch file and treat that
+  # as the source from here on.
+  local srcfile="$gitfile"
+  if [ -n "$secret_scope" ]; then
+    srcfile="$TMP/tt-secret.$$.plain"
+    if ! ttSecretDecrypt "$secret_scope" "$gitfile" "$srcfile"; then
+      err "Cannot decrypt secret ${gitfile##$BASE/configs/} (scope $secret_scope)"
+      note "Secret not synced" "$dotfile"
+      return
+    fi
+  fi
+
   logn "Comparing ${GN}$dotfile${RESET} <-> ${BL}${gitfile##$BASE/configs/}${RESET}....."
   if [ -e "$dotfile" ]; then
     s1=$(shasum <"$dotfile")
-    s2=$(shasum <"$gitfile")
+    s2=$(shasum <"$srcfile")
     if [ "$s1" = "$s2" ]; then
       log "${GREEN}Ok${RESET}"
     else
@@ -316,7 +333,8 @@ function syncFile() {
       if [ -e "$dotfile" ]; then
         mv "$dotfile" "$dotfile.ttbak"
       fi
-      if cp "$gitfile" "$dotfile"; then
+      if cp "$srcfile" "$dotfile"; then
+        [ -n "$secret_scope" ] && chmod 600 "$dotfile"
         note "Updated file" "$dotfile (backup: $dotfile.ttbak)"
       else
         err "Copy failed"
@@ -331,7 +349,8 @@ function syncFile() {
     if [ -e "$dotfile" ]; then
       mv "$dotfile" "$dotfile.ttbak"
     fi
-    if cp "$gitfile" "$dotfile"; then
+    if cp "$srcfile" "$dotfile"; then
+      [ -n "$secret_scope" ] && chmod 600 "$dotfile"
       note "Created file" "$dotfile"
     else
       err "Copy failed"
@@ -571,7 +590,7 @@ function syncInstall() {
 
 function syncTTtoSystemFiles() {
   log "Updating local files from TT."
-  createEffectiveFilesList $TMP/to_copy.lst
+  createEffectiveFilesList $TMP/to_copy.lst 1
   #echo >$TMP/to_copy.lst
 
   #for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
@@ -602,22 +621,44 @@ function syncTTtoSystemFiles() {
   cat $TMP/to_copy.lst | while read l; do
     f=$(echo "$l" | cut -f1 -d\;)
     d=$(echo "$l" | cut -f2 -d\;)
-    syncFile "$d" "$f"
+    sc=$(echo "$l" | cut -f3 -d\;)
+    syncFile "$d" "$f" "$sc"
   done
 }
 
 function updatingTTFromSystemFiles() {
   log "Updating ToolTamer files from this system."
-  createEffectiveFilesList $TMP/to_copy.lst
+  createEffectiveFilesList $TMP/to_copy.lst 1
   local updated=0
   local skipped=0
   while IFS= read -r entry; do
     if [ -z "$entry" ]; then
       continue
     fi
-    local gitfile="${entry%%;*}"
-    local dotfile="${entry##*;}"
+    local gitfile dotfile secret_scope
+    gitfile=$(echo "$entry" | cut -f1 -d\;)
+    dotfile=$(echo "$entry" | cut -f2 -d\;)
+    secret_scope=$(echo "$entry" | cut -f3 -d\;)
     if [ -z "$gitfile" ] || [ -z "$dotfile" ]; then
+      continue
+    fi
+    if [ -n "$secret_scope" ] && [ ! -d "$dotfile" ]; then
+      # Secret file: store ciphertext, compare plaintext.
+      mkdir -p "$(dirname "$gitfile")"
+      local tmp_plain="$TMP/tt-secret.$$.plain"
+      if [ -e "$gitfile" ] && ttSecretDecrypt "$secret_scope" "$gitfile" "$tmp_plain" 2>/dev/null; then
+        if [ "$(shasum <"$tmp_plain")" = "$(shasum <"$dotfile")" ]; then
+          continue
+        fi
+      fi
+      if ttSecretEncrypt "$secret_scope" "$dotfile" "$gitfile"; then
+        log "  ${GN}Captured secret${RESET} ${dotfile#$HOME/} -> ${gitfile##$BASE/configs/} [${secret_scope}]"
+        note "Captured secret into ToolTamer" "$dotfile"
+        ((updated = updated + 1))
+      else
+        err "Encrypting secret $dotfile failed (scope $secret_scope)"
+        ((skipped = skipped + 1))
+      fi
       continue
     fi
     if [ ! -e "$dotfile" ]; then
@@ -904,6 +945,11 @@ if [ $# -gt 0 ]; then
   --warm-deps)
     shift
     run_python_tool tui.warm_deps "$@"
+    exit $?
+    ;;
+  --secrets | secrets)
+    shift
+    run_python_tool tui.secrets "$@"
     exit $?
     ;;
   -h | --help)

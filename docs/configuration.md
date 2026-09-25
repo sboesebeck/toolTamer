@@ -220,6 +220,71 @@ submodules. A repository with uncommitted changes or a history that has
 diverged from the remote is skipped, not merged — you resolve it by hand,
 in the repository itself.
 
+### Secrets (encrypted entries)
+
+The store is one git repo that every machine clones in full, so anything
+committed to it is on every machine. Put ssh keys, tokens, `.netrc` and
+similar material in `secrets.conf` instead of `files.conf` — those entries
+are stored **encrypted** (age), and a machine can only decrypt the ones it
+is entitled to.
+
+```conf
+# configs/common/secrets.conf
+# stored;target[;scope]   — same layout as files.conf, scope defaults to
+#                           the config the entry lives in
+id_ed25519;.ssh/id_ed25519
+work_token;.config/work/token
+```
+
+A **scope** is a config name, so entitlement follows the include hierarchy:
+a secret in `common` reaches every machine, one in a host config only that
+host, one in `common_mac` the machines that include it. Each scope has an
+age keypair; the private half is stored in the repo **wrapped to the
+members plus the admin key**, and secret files are encrypted to the scope's
+public key. Adding a machine re-wraps that one small key — the secret files
+are not touched.
+
+Requires the `age` binary (`brew install age` / `apt install age`).
+
+#### Bootstrapping a new machine
+
+No private key is ever copied between machines — only public keys travel.
+
+```bash
+# first machine, once
+tt --secrets init          # creates keys/<id>.key (local) and secrets/admin.pub
+                           # prints the admin private key — keep it in a
+                           # password manager, off the repo
+
+# new machine: clone the config repo, then
+tt --secrets init          # registers this machine's public key
+tt --secrets join --admin-key <recovery key>   # becomes a member of its scopes
+
+# move existing plaintext files into encrypted storage
+tt --secrets migrate        # dry run; --apply to encrypt
+tt --secrets check          # fails if a secret entry is plaintext
+tt --secrets status         # scopes, members, entries
+```
+
+`join` needs the admin/recovery key once (a paste from your password
+manager). A machine that is *not* a member of a scope and holds no admin
+key cannot decrypt it — that is the isolation. Remove a machine with
+`tt --secrets rotate <scope>` (new scope key + re-encrypt its files).
+
+#### How sync treats a secret
+
+- **TT → system**: decrypt, write, `chmod 600`.
+- **system → TT**: encrypt; only rewritten when the plaintext actually
+  changed (age output is non-deterministic).
+- Comparisons and diffs use the decrypted plaintext, never the ciphertext.
+- In the file manager secrets show with an `S` token and a lock; `a` applies
+  (decrypts), `u` saves (encrypts), `s` encrypts an existing plaintext entry.
+- Bash delegates all crypto to `python -m tui.secrets`, so there is a single
+  implementation; the encrypt/decrypt path needs only Python + `age`.
+
+Private keys (`keys/`) are added to the store's `.gitignore` automatically,
+like `machine-id`.
+
 ### `includes.conf`
 
 A simple list of config directory names to include, one per line:

@@ -37,6 +37,8 @@ from tui.core.config import (
 from tui.core.diff_render import render_changed_diffs
 from tui.core.ignore import IgnoreMatcher, append_ignore, load
 from tui.core.repo import RepoSpec
+from tui.core.secret_ops import ensure_scope_for, migrate_entry
+from tui.core.secrets import SecretStore, SecretsError
 from tui.core.system import SystemInfo
 
 
@@ -92,6 +94,7 @@ class FileScreen(Screen):
         ("m", "move_file", "Move"),
         ("n", "add_file", "Add File"),
         ("g", "convert_to_repo", "To repo"),
+        ("s", "make_secret", "Encrypt"),
         ("slash", "focus_search", "Search"),
         ("tab", "switch_pane", "Switch Pane"),
     ]
@@ -100,6 +103,7 @@ class FileScreen(Screen):
         super().__init__()
         self._tt_config = tt_config
         self._system = system
+        self._store = SecretStore(tt_config.base, system.hostname)
         # tree-hash cache: path -> (stat signature, content hash)
         self._tree_cache: dict[str, tuple[str, str]] = {}
         # rows built by the last _load_files pass, so filtering can re-render
@@ -169,6 +173,10 @@ class FileScreen(Screen):
         home = Path.home()
         # Sort: by effective target, effective entries before shadowed ones
         for m in sorted(mappings, key=lambda x: (x.effective_target, not x.is_effective)):
+            if self._tt_config.is_secret(m.config, m.stored, m.target):
+                # Listed from secrets.conf below, with a lock token. A file
+                # that is both mapped and secret would otherwise appear twice.
+                continue
             eff_target = m.effective_target
             sys_file = home / eff_target
             spec = m.repo
@@ -225,7 +233,57 @@ class FileScreen(Screen):
                 searchable, st, target_text, cfg_text,
                 f"{m.config}:{m.stored}:{m.target}",
             ))
+
+        # Secret entries (secrets.conf) get their own rows so they are
+        # visible and manageable without leaking plaintext anywhere.
+        for sec in sorted(
+            self._tt_config.get_effective_secrets(host),
+            key=lambda x: (x.effective_target, not x.is_effective),
+        ):
+            if not sec.is_effective:
+                continue
+            eff_target = sec.effective_target
+            sys_file = home / eff_target
+            status = self._secret_status(sec.repo_path, sys_file, sec.scope)
+            status_token = {
+                "ok": "OK",
+                "modified": "!!",
+                "missing_system": "--",
+                "missing_repo": "??",
+            }.get(status, "??")
+            searchable = f"secret {status_token} ~/{eff_target} {sec.config}".lower()
+            st = Text("S")
+            if status == "ok":
+                st.stylize("green")
+            elif status == "modified":
+                st.stylize("bold yellow")
+            else:
+                st.stylize("red")
+            target_text = Text(f"~/{eff_target}")
+            target_text.append("  \U0001f512", style="dim cyan")
+            cfg_text = Text(sec.config)
+            rows.append((
+                searchable, st, target_text, cfg_text,
+                f"{sec.config}:{sec.stored}:{sec.target}",
+            ))
         return rows
+
+    def _secret_status(self, store: Path, system: Path, scope: str) -> str:
+        """Compare a secret by its decrypted plaintext, never its ciphertext
+        (age output is non-deterministic and would always read as changed)."""
+        if not store.exists():
+            return "missing_repo"
+        if not system.exists():
+            return "missing_system"
+        try:
+            data = self._store.read_secret(scope, store)
+        except SecretsError:
+            # Cannot decrypt (no key yet / wrong store) — surface as missing
+            # rather than pretending it is in sync.
+            return "missing_repo"
+        if hashlib.sha1(data).hexdigest() == hashlib.sha1(system.read_bytes()).hexdigest():
+            return "ok"
+        return "modified"
 
     def _refresh_files(self) -> None:
         current_filter = self.query_one("#file-filter", Input).value
@@ -406,6 +464,63 @@ class FileScreen(Screen):
         config, stored, target = parts
         self._show_diff(config, stored, target)
 
+    def _show_secret_diff(self, secret, sys_file: Path, log: RichLog) -> None:
+        """Detail pane for a secret entry: decrypt to a temp and diff that
+        against the system file. The store copy is never shown as raw
+        ciphertext, and no plaintext is written where git can see it."""
+        import shutil
+        import subprocess
+        import tempfile
+
+        self.app.call_from_thread(
+            log.write,
+            Text(f"Encrypted — scope '{secret.scope}' (\U0001f512)", style="bold cyan"),
+        )
+        if not secret.repo_path.exists():
+            self.app.call_from_thread(log.write, Text("Stored ciphertext missing", style="red"))
+            return
+        if not sys_file.exists():
+            self.app.call_from_thread(
+                log.write,
+                Text("System file missing (a=apply decrypts the stored copy)", style="red"),
+            )
+            return
+        try:
+            data = self._store.read_secret(secret.scope, secret.repo_path)
+        except SecretsError as exc:
+            self.app.call_from_thread(log.write, Text(f"Cannot decrypt: {exc}", style="bold red"))
+            return
+        tmpdir = Path(tempfile.mkdtemp(prefix="tt-secret-diff-"))
+        tmp = tmpdir / "plain"
+        tmp.write_bytes(data)
+        try:
+            if hashlib.sha1(data).hexdigest() == hashlib.sha1(sys_file.read_bytes()).hexdigest():
+                self.app.call_from_thread(log.write, Text("Files are identical", style="green"))
+            else:
+                self.app.call_from_thread(log.write, Text("Files differ (plaintext):", style="yellow"))
+                try:
+                    result = subprocess.run(
+                        ["diff", "-u", str(tmp), str(sys_file)],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    for diff_line in result.stdout.splitlines()[:100]:
+                        line = Text(diff_line)
+                        if diff_line.startswith("+"):
+                            line.stylize("green")
+                        elif diff_line.startswith("-"):
+                            line.stylize("red")
+                        elif diff_line.startswith("@@"):
+                            line.stylize("cyan")
+                        self.app.call_from_thread(log.write, line)
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    self.app.call_from_thread(log.write, Text("diff command not available", style="dim"))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        self.app.call_from_thread(
+            log.write,
+            Text("a=apply (decrypt to system)  u=save (encrypt system)  r=remove  s=encrypt", style="dim"),
+        )
+
     @work(thread=True, exclusive=True)
     def _show_diff(self, config: str, stored: str, target: str) -> None:
         import subprocess
@@ -421,6 +536,11 @@ class FileScreen(Screen):
         self.app.call_from_thread(log.write, Text(f"~/{eff_target}", style="bold"))
         self.app.call_from_thread(log.write, Text(f"Config: {config}", style="cyan"))
         self.app.call_from_thread(log.write, Text(f"Stored as: {stored}", style="dim"))
+
+        secret = self._tt_config.secret_for(config, stored, target)
+        if secret is not None:
+            self._show_secret_diff(secret, sys_file, log)
+            return
 
         from tui.core.repo import read_marker
         spec = read_marker(repo_file)
@@ -754,6 +874,22 @@ class FileScreen(Screen):
         sys_file = Path.home() / _resolve_effective_target(stored, target)
         if not repo_file.exists():
             return
+
+        secret = self._tt_config.secret_for(config, stored, target)
+        if secret is not None:
+            try:
+                self._store.decrypt_from_scope(secret.scope, repo_file, sys_file)
+                os.chmod(sys_file, 0o600)
+                self.notify(
+                    f"Decrypted ~/{secret.effective_target} (scope {secret.scope})",
+                    severity="information", timeout=8,
+                )
+            except (SecretsError, OSError) as exc:
+                self.notify(f"Secret apply failed: {exc}", severity="error", timeout=8)
+            self._refresh_files()
+            self._show_diff(config, stored, target)
+            return
+
         if repo_file.is_dir() and not os.access(repo_file, os.R_OK | os.X_OK):
             # R28: an unreadable store directory tells us nothing about what
             # it holds. It may in fact be a repo entry whose .ttgit we simply
@@ -890,6 +1026,17 @@ class FileScreen(Screen):
             self._refresh_files()
             return
 
+        if self._tt_config.is_secret(config, stored, target):
+            # A secret has one home config; no parent/override choice, which
+            # would move the encryption scope. Capture straight back.
+            if not sys_file.exists():
+                log = self.query_one("#file-diff", RichLog)
+                log.clear()
+                log.write(Text("Nothing on the system to encrypt.", style="yellow"))
+                return
+            self._do_capture(config, stored, target, "parent")
+            return
+
         if config == host:
             # Already host-local: nothing to choose, just capture the system state.
             if not sys_file.exists():
@@ -1011,6 +1158,30 @@ class FileScreen(Screen):
         if not sys_path.exists():
             return
         host = self._system.hostname
+
+        secret = self._tt_config.secret_for(config, stored, target)
+        if secret is not None:
+            # Secrets stay in the config they were selected from; there is no
+            # host-override variant (that would move the scope). Encrypt the
+            # system plaintext and store ciphertext.
+            dest_path = self._tt_config.configs_dir / config / "files" / stored
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                ensure_scope_for(
+                    self._tt_config, self._store, host, secret.scope,
+                    self._store.find_admin_key(),
+                )
+                self._store.encrypt_to_scope(secret.scope, sys_path, dest_path)
+                self.notify(
+                    f"Encrypted ~/{secret.effective_target} (scope {secret.scope})",
+                    severity="information", timeout=8,
+                )
+            except (SecretsError, OSError) as exc:
+                self.notify(f"Secret capture failed: {exc}", severity="error", timeout=8)
+            self._refresh_files()
+            self._show_diff(config, stored, target)
+            return
+
         if choice == "override":
             dest_config = host
             dest_path = self._tt_config.configs_dir / host / "files" / stored
@@ -1052,6 +1223,19 @@ class FileScreen(Screen):
         config, stored, target = sel
         from tui.core.config import _resolve_effective_target
         eff_target = _resolve_effective_target(stored, target)
+        if self._tt_config.is_secret(config, stored, target):
+            # Secrets live only in secrets.conf; remove that entry and drop
+            # the stored ciphertext if nothing else references it.
+            self._tt_config.remove_secret_mapping(config, stored, target)
+            cipher = self._tt_config.configs_dir / config / "files" / stored
+            if cipher.is_file():
+                cipher.unlink()
+            log = self.query_one("#file-diff", RichLog)
+            log.clear()
+            log.write(Text(f"Removed secret ~/{eff_target} from {config}", style="green"))
+            log.write(Text("File remains on system, just no longer managed by TT.", style="dim"))
+            self._refresh_files()
+            return
         deleted = self._tt_config.remove_file(config, stored, target)
         log = self.query_one("#file-diff", RichLog)
         log.clear()
@@ -1059,6 +1243,42 @@ class FileScreen(Screen):
         log.write(Text("File remains on system, just no longer managed by TT.", style="dim"))
         if deleted:
             log.write(Text("Stored copy deleted from the TT config.", style="dim"))
+        self._refresh_files()
+
+    def action_make_secret(self) -> None:
+        """Encrypt the selected plaintext entry (move it to secrets.conf).
+
+        The scope defaults to the config the entry lives in, matching the
+        hierarchy: an entry in `common` reaches every machine, a host entry
+        only its host."""
+        sel = self._get_selected()
+        if not sel:
+            return
+        config, stored, target = sel
+        from tui.core.config import _resolve_effective_target
+        eff_target = _resolve_effective_target(stored, target)
+        if self._tt_config.is_secret(config, stored, target):
+            self.notify(f"~/{eff_target} is already encrypted.", severity="information", timeout=6)
+            return
+        repo_file = self._tt_config.configs_dir / config / "files" / stored
+        if not repo_file.is_file() or repo_file.is_symlink():
+            self.notify(
+                f"Only regular files can be encrypted — ~/{eff_target} is a "
+                f"directory or symlink.", severity="warning", timeout=8,
+            )
+            return
+        scope = config
+        try:
+            migrate_entry(
+                self._tt_config, self._store, self._system.hostname,
+                config, stored, target, scope, self._store.find_admin_key(),
+            )
+        except (SecretsError, OSError) as exc:
+            self.notify(f"Encrypt failed: {exc}", severity="error", timeout=8)
+            return
+        self.notify(
+            f"Encrypted ~/{eff_target} (scope {scope})", severity="information", timeout=8,
+        )
         self._refresh_files()
 
     def action_move_file(self) -> None:

@@ -212,6 +212,28 @@ class FileMapping:
         return self.repo is not None
 
 
+@dataclass
+class SecretMapping:
+    """A secret file mapping entry from secrets.conf.
+
+    `stored` lives under `configs/<config>/files/` like any other entry, but
+    holds age ciphertext. `scope` names the key that can decrypt it and
+    defaults to the config name — so a secret in `common` reaches every
+    machine, one in a host config only that host. See tui/core/secrets.py."""
+    stored: str
+    target: str
+    scope: str
+    config: str
+    repo_path: Path
+    is_effective: bool = True
+    shadowed_by: str | None = None
+
+    @property
+    def effective_target(self) -> str:
+        return _resolve_effective_target(self.stored, self.target)
+
+
+
 class TTConfig:
     """Interface to the ToolTamer config directory."""
 
@@ -379,6 +401,71 @@ class TTConfig:
                 ))
         return result
 
+    def get_secrets(self, config: str) -> list[tuple[str, str, str]]:
+        """Parse a config's secrets.conf: (stored, target, scope) triples.
+
+        Same `stored;target` layout as files.conf; an optional third field
+        overrides the scope, which otherwise defaults to the config name.
+        An entry is secret *only* by virtue of living here."""
+        conf_file = self.configs_dir / config / "secrets.conf"
+        if not conf_file.exists():
+            return []
+        secrets: list[tuple[str, str, str]] = []
+        for line in conf_file.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split(";")]
+            if len(parts) >= 3:
+                stored, target, scope = parts[0], parts[1], parts[2]
+            else:
+                stored = parts[0]
+                target = parts[1] if len(parts) == 2 else parts[0]
+                scope = config
+            if stored and target:
+                secrets.append((stored, target, scope or config))
+        return secrets
+
+    def get_effective_secrets(self, config: str) -> list[SecretMapping]:
+        """Return all secret mappings across the include chain, last-write
+        wins by effective target, mirroring get_effective_file_mappings."""
+        chain = self.resolve_chain(config)
+        winner: dict[str, tuple[str, str, str]] = {}
+        for cfg in chain:
+            for stored, target, scope in self.get_secrets(cfg):
+                winner[_resolve_effective_target(stored, target)] = (cfg, stored, scope)
+
+        result: list[SecretMapping] = []
+        for cfg in chain:
+            for stored, target, scope in self.get_secrets(cfg):
+                eff = _resolve_effective_target(stored, target)
+                win_cfg, win_stored, _win_scope = winner[eff]
+                is_effective = cfg == win_cfg and stored == win_stored
+                result.append(SecretMapping(
+                    stored=stored,
+                    target=target,
+                    scope=scope,
+                    config=cfg,
+                    repo_path=self.configs_dir / cfg / "files" / stored,
+                    is_effective=is_effective,
+                    shadowed_by=None if is_effective else win_cfg,
+                ))
+        return result
+
+    def secret_for(self, config: str, stored: str, target: str) -> SecretMapping | None:
+        """The secret mapping for exactly this entry, or None. Membership is
+        by (stored, target); scope defaults to the config name."""
+        for s, t, scope in self.get_secrets(config):
+            if s == stored and t == target:
+                return SecretMapping(
+                    stored=s, target=t, scope=scope, config=config,
+                    repo_path=self.configs_dir / config / "files" / s,
+                )
+        return None
+
+    def is_secret(self, config: str, stored: str, target: str) -> bool:
+        return self.secret_for(config, stored, target) is not None
+
     def get_taps(self, config: str) -> list[str]:
         taps_file = self.configs_dir / config / "taps"
         if not taps_file.exists():
@@ -429,6 +516,37 @@ class TTConfig:
             else:
                 s = t = line_stripped
             if s == stored and t == target:
+                continue
+            filtered.append(line)
+        conf_file.write_text("\n".join(filtered) + "\n" if filtered else "")
+
+    def add_secret_mapping(self, config: str, stored: str, target: str, scope: str) -> None:
+        """Add a secret mapping to a config's secrets.conf. No-op when the
+        same stored/target already exists. A scope equal to the config name
+        is left implicit (two fields), so the file stays readable."""
+        conf_file = self.configs_dir / config / "secrets.conf"
+        if not conf_file.exists():
+            conf_file.write_text("")
+        for s, t, _sc in self.get_secrets(config):
+            if s == stored and t == target:
+                return
+        suffix = "" if scope == config else f";{scope}"
+        with conf_file.open("a") as f:
+            f.write(f"{stored};{target}{suffix}\n")
+
+    def remove_secret_mapping(self, config: str, stored: str, target: str) -> None:
+        """Remove a secret mapping from a config's secrets.conf."""
+        conf_file = self.configs_dir / config / "secrets.conf"
+        if not conf_file.exists():
+            return
+        filtered = []
+        for line in conf_file.read_text().splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                filtered.append(line)
+                continue
+            parts = [p.strip() for p in stripped.split(";")]
+            if len(parts) >= 2 and parts[0] == stored and parts[1] == target:
                 continue
             filtered.append(line)
         conf_file.write_text("\n".join(filtered) + "\n" if filtered else "")

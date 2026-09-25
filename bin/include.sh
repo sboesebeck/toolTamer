@@ -89,8 +89,17 @@ function fzf_themed() {
     "$@"
 }
 
+# Build the effective mapping list: one `<store>;<absolute system path>` line
+# per managed file, last-write-wins by target across the include chain.
+#
+# With $2 = 1, secrets.conf entries are included as a third field
+# `<store>;<path>;<scope>`; the scope is empty for plain files. Callers that
+# do not deal with secrets (the TUI is separate, admin diffing is files-only)
+# pass nothing and get the historical two-field output.
 function createEffectiveFilesList() {
-  echo >$1
+  local out="$1"
+  local with_secrets="${2:-0}"
+  echo >$out
 
   for i in common $(<$BASE/configs/$HOST/includes.conf) $HOST; do
     log "Processing files from config: ${BL}$i$RESET"
@@ -108,15 +117,39 @@ function createEffectiveFilesList() {
         #ends with /
         d=$d$(basename "$f")
       fi
-      if grep ";$HOME/$d" $1 >/dev/null; then
-        grep -v ";$HOME/$d" $1 >$1.tmp || {
+      if grep ";$HOME/$d" $out >/dev/null; then
+        grep -v ";$HOME/$d" $out >$out.tmp || {
           err "error"
           exit 1
         }
-        mv $1.tmp $1
+        mv $out.tmp $out
       fi
-      echo "$BASE/configs/$i/files/$f;$HOME/$d" >>$1
+      echo "$BASE/configs/$i/files/$f;$HOME/$d" >>$out
     done
+
+    if [ "$with_secrets" = "1" ] && [ -f "$BASE/configs/$i/secrets.conf" ]; then
+      cat "$BASE/configs/$i/secrets.conf" | while read -r l; do
+        f=$(echo "$l" | cut -f1 -d\;)
+        d=$(echo "$l" | cut -f2 -d\;)
+        sc=$(echo "$l" | cut -f3 -d\;)
+        if [ -z "$f" ] || [[ "$f" =~ "#" ]]; then
+          continue
+        fi
+        # Scope defaults to the config the secret lives in (empty field 3).
+        [ -z "$sc" ] && sc="$i"
+        if [ "$d" != "${d%/}" ]; then
+          d=$d$(basename "$f")
+        fi
+        if grep ";$HOME/$d" $out >/dev/null; then
+          grep -v ";$HOME/$d" $out >$out.tmp || {
+            err "error"
+            exit 1
+          }
+          mv $out.tmp $out
+        fi
+        echo "$BASE/configs/$i/files/$f;$HOME/$d;$sc" >>$out
+      done
+    fi
   done
 }
 
@@ -165,6 +198,45 @@ function ttIgnoreCheckReadable() {
   py=$(ttIgnoreEngine) || return 1
   PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.ttignore check-readable "$tree" "$rules"
 }
+
+# --- secret scopes ----------------------------------------------------
+#
+# Bash never grows a second crypto implementation. `tt` shells out to
+# `tui.secrets`, the CLI around tui/core/secrets.py, exactly as it does for
+# ignore rules. The scope keys and the decrypt/encrypt logic live there;
+# here we only pick an interpreter and pass paths through.
+
+# Print a Python interpreter that can import the secrets module, or nothing.
+function ttSecretEngine() {
+  local cand
+  for cand in "$TT_REPO_ROOT/.venv/bin/python3" "python3"; do
+    [ -n "$cand" ] || continue
+    if command -v "$cand" >/dev/null 2>&1 &&
+      PYTHONPATH="$TT_REPO_ROOT" "$cand" -c 'import tui.core.secrets' >/dev/null 2>&1; then
+      command -v "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Decrypt the scope-encrypted $2 into $3. Uses TT_BASE so the CLI finds the
+# same key material the store uses.
+function ttSecretDecrypt() {
+  local scope="$1" src="$2" dest="$3" py
+  py=$(ttSecretEngine) || return 1
+  TT_BASE="$BASE" PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.secrets \
+    decrypt --scope "$scope" --in "$src" --out "$dest"
+}
+
+# Encrypt the plaintext $2 to $1's scope, writing $3.
+function ttSecretEncrypt() {
+  local scope="$1" src="$2" dest="$3" py
+  py=$(ttSecretEngine) || return 1
+  TT_BASE="$BASE" PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.secrets \
+    encrypt --scope "$scope" --in "$src" --out "$dest"
+}
+
 
 # Content hash of a directory tree (all regular files + symlinks, path-stable).
 # Prints "missing" for non-directories so comparisons always differ.
