@@ -39,7 +39,7 @@ from tui.core.diff_render import render_changed_diffs
 from tui.core.ignore import IgnoreMatcher, append_ignore, load
 from tui.core.repo import RepoSpec
 from tui.core.secret_ops import ensure_scope_for, mark_inner_secret, migrate_entry
-from tui.core.secrets import SecretStore, SecretsError
+from tui.core.secrets import SecretStore, SecretsError, secret_file_status
 from tui.core.system import SystemInfo
 
 
@@ -358,18 +358,7 @@ class FileScreen(Screen):
         cached = self._secret_cache.get(cache_key)
         if cached is not None and sig is not None and cached[0] == sig:
             return cached[1]
-        try:
-            data = self._store.read_secret(scope, store)
-        except SecretsError:
-            # Cannot decrypt (no key yet / wrong store) — surface as missing
-            # rather than pretending it is in sync.
-            status = "missing_repo"
-        else:
-            status = (
-                "ok"
-                if hashlib.sha1(data).hexdigest() == hashlib.sha1(system.read_bytes()).hexdigest()
-                else "modified"
-            )
+        status = secret_file_status(self._store, scope, store, system)
         if sig is not None:
             self._secret_cache[cache_key] = (sig, status)
         return status
@@ -646,6 +635,33 @@ class FileScreen(Screen):
                     f"This directory is a git repository ({hint.url}). "
                     f"Press 'g' to track it as a repo instead of copying it.",
                     style="bold yellow",
+                ))
+                self.app.call_from_thread(log.write, Text(""))
+
+            # A .gitignore inside a plain tracked directory is read by the
+            # store *git repo* as an ignore file; one that lists itself is
+            # never committed, so other machines see it as missing. Surface
+            # it here, where the user is looking at the "changed" entry.
+            from tui.core.store_check import store_ignored_in_dir
+            ignored = store_ignored_in_dir(
+                self._tt_config, config, stored, target, Path.home()
+            )
+            if ignored:
+                self.app.call_from_thread(log.write, Text(
+                    f"This entry shows as changed because the store git repo "
+                    f"ignores {len(ignored)} visible file(s) — they can never "
+                    f"be committed and look missing elsewhere:", style="bold yellow",
+                ))
+                for rel in ignored[:10]:
+                    self.app.call_from_thread(log.write, Text(f"  {rel}", style="yellow"))
+                if len(ignored) > 10:
+                    self.app.call_from_thread(
+                        log.write, Text(f"  ... and {len(ignored) - 10} more", style="dim")
+                    )
+                self.app.call_from_thread(log.write, Text(
+                    "Fix: drop the self-ignore (or the !/.gitignore re-include) "
+                    "in .ttignore/.gitignore, or track the file with 'git add -f'.",
+                    style="dim",
                 ))
                 self.app.call_from_thread(log.write, Text(""))
 

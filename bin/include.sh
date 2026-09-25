@@ -237,6 +237,18 @@ function ttSecretEncrypt() {
     encrypt --scope "$scope" --in "$src" --out "$dest"
 }
 
+# Warn (non-fatal) about visible tracked files the store *git repo* refuses to
+# commit — a `.gitignore` inside a plain tracked directory that lists itself
+# is read by the store git as an ignore file and never committed, so other
+# machines see the file as missing. Repo entries are unaffected (skipped in
+# tui.core.store_check). Silent when there is nothing to report or no engine.
+function ttStoreGitWarn() {
+  local py
+  py=$(ttIgnoreEngine) || return 0
+  TT_BASE="$BASE" PYTHONPATH="$TT_REPO_ROOT" "$py" -m tui.store_check 2>&1
+  return 0
+}
+
 
 # Content hash of a directory tree (all regular files + symlinks, path-stable).
 # Prints "missing" for non-directories so comparisons always differ.

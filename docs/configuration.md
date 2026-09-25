@@ -135,6 +135,17 @@ store only when there is no system copy yet.
     get an anchored rule on both sides and drop out of the sync — the
     counterpart of **`s`**, which encrypts instead of hiding.
 
+!!! warning "A `.gitignore` inside a tracked directory belongs to git"
+
+    The store is itself a git repository, so a file literally named
+    `.gitignore` inside a tracked directory is read by the store's git as an
+    ignore file. One that lists itself (opencode's does) is then ignored and
+    **never committed** — other machines see it as missing and would delete
+    it. `.ttignore` is not affected and is the right place for rules. Use
+    `tt --check-files` (also run automatically before a file sync) to spot
+    this; the fix is to drop the self-ignore / the `!/.gitignore` re-include,
+    or to force-add the file (`git add -f`).
+
     This needs `pathspec`. In the normal `.venv` setup it is installed
     already. If a tracked directory carries ignore files but no usable
     engine is available, ToolTamer refuses that directory's mirror rather

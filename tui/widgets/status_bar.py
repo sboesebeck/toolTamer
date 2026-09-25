@@ -15,6 +15,7 @@ from tui.core.config import TTConfig, tree_hash
 from tui.core.dep_cache import DependencyResolver, default_cache_path
 from tui.core.ignore import load
 from tui.core.pkg_names import installed_index, is_installed, short_name
+from tui.core.secrets import SecretStore, secret_file_status
 from tui.core.system import SystemInfo
 
 
@@ -34,6 +35,29 @@ class StatusBar(Widget):
         self._deps = DependencyResolver(
             system, default_cache_path(tt_config.base)
         )
+        # Secret entries live in secrets.conf, not files.conf; the dashboard
+        # used to ignore them entirely, so a changed secret read as "all
+        # synced" here while the file manager correctly showed it differing.
+        self._secrets = SecretStore(tt_config.base, system.hostname)
+        self._secret_cache: dict[str, tuple[tuple, str]] = {}
+
+    def _secret_status(self, store_path: Path, system_path: Path, scope: str) -> str:
+        """Decrypted secret status, cached on both sides' stat signature so
+        the dashboard's periodic scan does not shell out to age every time."""
+        try:
+            st = store_path.stat()
+            sy = system_path.stat()
+            sig = (st.st_size, st.st_mtime_ns, sy.st_size, sy.st_mtime_ns)
+        except OSError:
+            sig = None
+        key = str(store_path)
+        cached = self._secret_cache.get(key)
+        if cached is not None and sig is not None and cached[0] == sig:
+            return cached[1]
+        status = secret_file_status(self._secrets, scope, store_path, system_path)
+        if sig is not None:
+            self._secret_cache[key] = (sig, status)
+        return status
 
     def _host_label(self) -> str:
         # The config name is what matters; the live hostname is appended
@@ -241,6 +265,20 @@ class StatusBar(Widget):
                         modified_files.append(m.effective_target)
                 except (OSError, PermissionError):
                     continue
+
+        # Secret entries (secrets.conf) are managed files too, but they live
+        # outside files.conf. Compare them by decrypted plaintext, exactly as
+        # the file manager does, so the dashboard's count matches it.
+        for sec in self._tt_config.get_effective_secrets(host):
+            if not sec.is_effective:
+                continue
+            total_files += 1
+            sys_file = home / sec.effective_target
+            status = self._secret_status(sec.repo_path, sys_file, sec.scope)
+            if status == "modified":
+                modified_files.append(sec.effective_target)
+            elif status in ("missing_repo", "missing_system"):
+                missing_file_names.append(sec.effective_target)
 
         file_text = f"{total_files} managed"
         if modified_files:
