@@ -264,3 +264,30 @@ def test_mark_and_unmark_inner_secret(tmp_path: Path):
     assert cfg.get_secrets("common") == []
     assert (store_dir / ".ttignore").read_text() == ""
     assert (sys_dir / ".ttignore").read_text() == ""
+
+
+def test_move_secret_relocates_and_rescopes(tmp_path: Path):
+    from tui.core.secret_ops import ensure_scope_for, move_secret
+
+    base = _base_with_configs(tmp_path)
+    store = _store(base, "hostA")
+    store.ensure_admin_key()
+    ensure_scope_for(TTConfig(base), store, "hostA", "common")
+    (base / "configs" / "common" / "secrets.conf").write_text("ssh/id;.ssh/\n")
+    src = base / "configs" / "common" / "files" / "ssh" / "id"
+    src.parent.mkdir(parents=True)
+    plain = tmp_path / "plain"
+    plain.write_text("KEY\n")
+    store.encrypt_to_scope("common", plain, src)
+
+    cfg = TTConfig(base)
+    move_secret(
+        cfg, store, "hostA", "common", "hostB", "ssh/id", ".ssh/", "common", "hostB"
+    )
+
+    assert cfg.get_secrets("common") == []
+    assert cfg.get_secrets("hostB") == [("ssh/id", ".ssh/", "hostB")]
+    dst = base / "configs" / "hostB" / "files" / "ssh" / "id"
+    assert S.is_ciphertext(dst)
+    assert not src.exists()
+    assert store.read_secret("hostB", dst) == b"KEY\n"

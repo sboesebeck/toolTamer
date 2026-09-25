@@ -457,10 +457,62 @@ def cmd_rotate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_move(args: argparse.Namespace) -> int:
+    from tui.core.config import _resolve_effective_target
+    from tui.core.secret_ops import move_secret
+
+    _base, machine_id, cfg, store = _context(args.base)
+    src, dst = args.src, args.dst
+    if not (cfg.configs_dir / src).is_dir():
+        print(f"config '{src}' not found", file=sys.stderr)
+        return 2
+    if not (cfg.configs_dir / dst).is_dir():
+        print(f"config '{dst}' not found", file=sys.stderr)
+        return 2
+    if src == dst:
+        print("--from and --to are the same", file=sys.stderr)
+        return 2
+    matches = tuple(args.match or ())
+    admin_key = store.find_admin_key()
+
+    plan = []
+    for stored, target, scope in cfg.get_secrets(src):
+        eff = _resolve_effective_target(stored, target)
+        if matches and not any(sub in eff for sub in matches):
+            continue
+        plan.append((stored, target, scope, eff))
+    if not plan:
+        print("Nothing to move.")
+        return 0
+
+    print(f"{'APPLY' if args.apply else 'DRY-RUN'}: {len(plan)} secret(s) {src} -> {dst}")
+    for stored, _target, scope, eff in plan:
+        print(f"  {src}:{stored} -> {dst}:{stored}  (~/{eff})  scope {scope} -> {dst}")
+    if not args.apply:
+        print("\nRe-run with --apply. Machines outside the target config will")
+        print("then neither receive nor be able to decrypt these entries.")
+        return 0
+
+    moved = 0
+    for stored, target, scope, _eff in plan:
+        try:
+            move_secret(
+                cfg, store, machine_id, src, dst, stored, target, scope, dst, admin_key
+            )
+        except SecretsError as exc:
+            print(f"  FAILED {stored}: {exc}", file=sys.stderr)
+            return 1
+        moved += 1
+        print(f"  moved {src}:{stored} -> {dst} [{dst}]")
+    print(f"Moved {moved} secret(s). Commit secrets/scopes/*, {src}/* and {dst}/*.")
+    print("NOTE: the old, broader-scoped ciphertext stays in git history until")
+    print("you re-init/purge the config repo — purge it to truly revoke access.")
+    return 0
+
+
 def cmd_unmark(args: argparse.Namespace) -> int:
     from tui.core.config import _resolve_effective_target
     from tui.core.secret_ops import unmark_inner_secret
-
     _base, machine_id, cfg, store = _context(args.base)
     target = _resolve_effective_target(args.path, args.path)
     chain = cfg.resolve_chain(machine_id)
@@ -540,6 +592,22 @@ def build_parser() -> argparse.ArgumentParser:
              "path or an inline AGE-SECRET-KEY-... (inline leaks to history/ps)",
     )
 
+    p_move = sub.add_parser(
+        "move", help="move secret entries to another config and re-scope them"
+    )
+    p_move.add_argument("--from", dest="src", required=True)
+    p_move.add_argument("--to", dest="dst", required=True)
+    p_move.add_argument(
+        "--match", action="append", default=None, metavar="SUBSTR",
+        help="only entries whose target contains SUBSTR; repeatable",
+    )
+    p_move.add_argument("--apply", action="store_true", help="write changes")
+    p_move.add_argument(
+        "--admin-key", default=None,
+        help="recovery key: omitted = hidden prompt, '-' = stdin, else a "
+             "path or an inline AGE-SECRET-KEY-... (inline leaks to history/ps)",
+    )
+
     p_unmark = sub.add_parser(
         "unmark", help="decrypt a file carved out of a tracked directory"
     )
@@ -565,6 +633,7 @@ COMMANDS = {
     "check": cmd_check,
     "migrate": cmd_migrate,
     "rotate": cmd_rotate,
+    "move": cmd_move,
     "unmark": cmd_unmark,
     "encrypt": cmd_encrypt,
     "decrypt": cmd_decrypt,

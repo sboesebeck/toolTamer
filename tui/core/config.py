@@ -367,6 +367,30 @@ class TTConfig:
                 mappings.append((stored, target))
         return mappings
 
+    def _dir_entries(self, chain: list[str]) -> list[tuple[int, str, str]]:
+        """(chain_index, config, effective_target) for every *directory*
+        mapping in the chain — plain snapshot or repo entry.
+
+        A more specific config's directory supersedes any entry inside it
+        from an *earlier* config (its own config's entries are left alone, so
+        the carve-out pattern — a tracked dir plus an inner secret — keeps
+        working). This is what lets a host that tracks `~/.ssh` as a whole
+        stop inheriting individual `~/.ssh/*` entries from `common`."""
+        entries: list[tuple[int, str, str]] = []
+        for idx, cfg in enumerate(chain):
+            for stored, target in self.get_file_mappings(cfg):
+                p = self.configs_dir / cfg / "files" / stored
+                if p.is_dir() and not p.is_symlink():
+                    entries.append((idx, cfg, _resolve_effective_target(stored, target)))
+        return entries
+
+    @staticmethod
+    def _subsumed_by_dir(eff: str, index: int, dirs) -> str | None:
+        for j, dcfg, deff in dirs:
+            if j > index and _path_within(eff, deff):
+                return dcfg
+        return None
+
     def get_effective_file_mappings(self, config: str) -> list[FileMapping]:
         """Return all file mappings across the include chain.
 
@@ -374,7 +398,9 @@ class TTConfig:
         in the chain wins (is_effective=True); the others are kept in the
         result with is_effective=False and shadowed_by set, so callers can
         surface duplicates instead of silently hiding them.
-        """
+
+        A directory mapping in a more specific config also supersedes every
+        entry inside it inherited from an earlier config."""
         chain = self.resolve_chain(config)
         # include.sh's createEffectiveFilesList does last-write-wins by
         # effective target across the full chain, so iterate everything
@@ -399,6 +425,15 @@ class TTConfig:
                     is_effective=is_effective,
                     shadowed_by=None if is_effective else win_cfg,
                 ))
+
+        dirs = self._dir_entries(chain)
+        for m in result:
+            if not m.is_effective:
+                continue
+            sub = self._subsumed_by_dir(m.effective_target, chain.index(m.config), dirs)
+            if sub is not None:
+                m.is_effective = False
+                m.shadowed_by = sub
         return result
 
     def get_secrets(self, config: str) -> list[tuple[str, str, str]]:
@@ -428,7 +463,11 @@ class TTConfig:
 
     def get_effective_secrets(self, config: str) -> list[SecretMapping]:
         """Return all secret mappings across the include chain, last-write
-        wins by effective target, mirroring get_effective_file_mappings."""
+        wins by effective target, mirroring get_effective_file_mappings.
+
+        A directory mapping in a more specific config supersedes inherited
+        secrets inside it too — a host that tracks `~/.ssh` as a whole stops
+        receiving `common`'s individual `~/.ssh/*` entries."""
         chain = self.resolve_chain(config)
         winner: dict[str, tuple[str, str, str]] = {}
         for cfg in chain:
@@ -450,6 +489,15 @@ class TTConfig:
                     is_effective=is_effective,
                     shadowed_by=None if is_effective else win_cfg,
                 ))
+
+        dirs = self._dir_entries(chain)
+        for m in result:
+            if not m.is_effective:
+                continue
+            sub = self._subsumed_by_dir(m.effective_target, chain.index(m.config), dirs)
+            if sub is not None:
+                m.is_effective = False
+                m.shadowed_by = sub
         return result
 
     def secret_for(self, config: str, stored: str, target: str) -> SecretMapping | None:

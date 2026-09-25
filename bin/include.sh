@@ -151,6 +151,41 @@ function createEffectiveFilesList() {
       done
     fi
   done
+
+  # Directory subsumption, matching TTConfig.get_effective_*: a directory
+  # mapping from a *later* config (more specific) overrides entries inside it
+  # inherited from an *earlier* config. The same config's own entries are left
+  # alone, so a tracked dir plus an inner secret (carve-out) still works.
+  # The list is in chain order, so "later config" = a directory line after the
+  # entry; entries of the directory's own config are skipped.
+  local -a _lines=()
+  local _n=0 _line
+  while IFS= read -r _line; do
+    _lines[$_n]="$_line"
+    _n=$((_n + 1))
+  done <"$out"
+  local _i _j _s _d _sc _s2 _d2 _sc2 _dcfg _c2
+  for ((_i = 0; _i < _n; _i++)); do
+    _s=$(echo "${_lines[$_i]}" | cut -f1 -d\;)
+    _d=$(echo "${_lines[$_i]}" | cut -f2 -d\;)
+    [ -d "$_s" ] || continue
+    _dcfg=${_s#"$BASE"/configs/}
+    _dcfg=${_dcfg%%/*}
+    for ((_j = 0; _j < _i; _j++)); do
+      [ -n "${_lines[$_j]}" ] || continue
+      _s2=$(echo "${_lines[$_j]}" | cut -f1 -d\;)
+      _d2=$(echo "${_lines[$_j]}" | cut -f2 -d\;)
+      _c2=${_s2#"$BASE"/configs/}
+      _c2=${_c2%%/*}
+      if [ "$_c2" != "$_dcfg" ] && [[ "$_d2" == "$_d/"* ]]; then
+        _lines[$_j]=""
+      fi
+    done
+  done
+  : >"$out"
+  for ((_i = 0; _i < _n; _i++)); do
+    [ -n "${_lines[$_i]}" ] && echo "${_lines[$_i]}" >>"$out"
+  done
 }
 
 # --- ignore rules (.gitignore / .ttignore) ----------------------------

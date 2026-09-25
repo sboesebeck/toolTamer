@@ -8,6 +8,8 @@ single plaintext entry becomes an encrypted one.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from pathlib import Path
 
 from tui.core.config import TTConfig, _resolve_effective_target
@@ -146,3 +148,45 @@ def unmark_inner_secret(
     sys_dir = (home or Path.home()) / dir_eff
     if sys_dir.is_dir():
         remove_ignore(sys_dir, inner_rel, is_dir=False)
+
+
+def move_secret(
+    cfg: TTConfig,
+    store: SecretStore,
+    machine_id: str,
+    src_config: str,
+    dst_config: str,
+    stored: str,
+    target: str,
+    scope_from: str,
+    scope_to: str,
+    admin_key: Path | None = None,
+) -> None:
+    """Move one secret entry from `src_config` to `dst_config`, re-scoped.
+
+    Decrypts the stored ciphertext with the old scope, writes it encrypted
+    to the new scope under the target config, moves the secrets.conf entry,
+    and deletes the old stored file. Used to relocate shared keys into a
+    narrower config so machines outside it neither receive nor can decrypt
+    them (the old, broader-scoped ciphertext must be purged from history
+    separately)."""
+    src_path = cfg.configs_dir / src_config / "files" / stored
+    if not src_path.is_file():
+        raise SecretsError(f"{src_config}:{stored} is not a stored file")
+    data = store.read_secret(scope_from, src_path, admin_key=admin_key)
+    ensure_scope_for(cfg, store, machine_id, scope_to, admin_key)
+    dst_path = cfg.configs_dir / dst_config / "files" / stored
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="tt-move-") as td:
+        tmp = Path(td) / "plain"
+        tmp.write_bytes(data)
+        store.encrypt_to_scope(scope_to, tmp, dst_path)
+    cfg.add_secret_mapping(dst_config, stored, target, scope_to)
+    cfg.remove_secret_mapping(src_config, stored, target)
+    src_path.unlink()
+    # prune now-empty parent dirs (e.g. an emptied ssh/ in the source)
+    parent = src_path.parent
+    files_root = cfg.configs_dir / src_config / "files"
+    while parent != files_root and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
