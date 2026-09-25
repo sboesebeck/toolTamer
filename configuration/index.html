@@ -512,6 +512,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#files-inside-a-tracked-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files inside a tracked directory
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -744,6 +755,17 @@
     <span class="md-ellipsis">
       
         How sync treats a secret
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-inside-a-tracked-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files inside a tracked directory
       
     </span>
   </a>
@@ -1143,18 +1165,32 @@ key cannot decrypt it — that is the isolation. Remove a machine with
 </ul>
 <p>Private keys (<code>keys/</code>) are added to the store's <code>.gitignore</code> automatically,
 like <code>machine-id</code>.</p>
+<h4 id="files-inside-a-tracked-directory">Files inside a tracked directory<a class="headerlink" href="#files-inside-a-tracked-directory" title="Permanent link">&para;</a></h4>
+<p>A whole tracked directory does not have to be encrypted to protect one file
+in it (e.g. <code>~/.config/opencode/opencode.json</code> next to many non-secret
+files). Such a file can be <strong>carved out</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>tt<span class="w"> </span>--secrets<span class="w"> </span>migrate<span class="w"> </span>--apply<span class="w"> </span>.config/opencode/opencode.json
+</code></pre></div>
+<p>The file is encrypted and recorded as its own secret entry, while an
+anchored rule (<code>/opencode.json</code>) is written to <code>.ttignore</code> on both sides so
+the directory mirror leaves it alone — the two engines never fight over it,
+and no mirror code had to change. The rest of the directory keeps syncing
+(and diffing) as plaintext.</p>
+<p>In the file manager, <code>s</code> on a directory opens a picker of its visible files
+to encrypt; <code>tt --secrets unmark &lt;path&gt;</code> decrypts one back into the
+directory mirror.</p>
 <h3 id="includesconf"><code>includes.conf</code><a class="headerlink" href="#includesconf" title="Permanent link">&para;</a></h3>
 <p>A simple list of config directory names to include, one per line:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>common_mac
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>dev_tools
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>common_mac
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>dev_tools
 </code></pre></div>
 <h3 id="local_installsh"><code>local_install.sh</code><a class="headerlink" href="#local_installsh" title="Permanent link">&para;</a></h3>
 <p>An optional shell script executed every time <code>tt --syncSys</code> (or "Update System") runs. Scripts are executed in order: common → includes → host.</p>
 <p>Use this for installations that can't be handled by the package manager (e.g. manual downloads, pip installs, font installations).</p>
 <h3 id="taps-macos-only"><code>taps</code> (macOS only)<a class="headerlink" href="#taps-macos-only" title="Permanent link">&para;</a></h3>
 <p>A list of Homebrew taps, one per line:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>homebrew/cask-fonts
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>hashicorp/tap
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>homebrew/cask-fonts
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>hashicorp/tap
 </code></pre></div>
 <p>These are added before packages are installed. Note that a package listed
 under its fully qualified name (<code>hashicorp/tap/terraform</code>) does not need an
@@ -1168,7 +1204,7 @@ regenerated automatically whenever your installed packages change.</p>
 machine and has no business being shared.</p>
 <h2 id="global-settings">Global Settings<a class="headerlink" href="#global-settings" title="Permanent link">&para;</a></h2>
 <p>ToolTamer's own settings are in <code>~/.config/toolTamer/tt.conf</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">GIT_AUTO_UPDATE</span><span class="o">=</span>ask<span class="w">    </span><span class="c1"># true | false | ask — auto git-pull on start</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nv">GIT_AUTO_UPDATE</span><span class="o">=</span>ask<span class="w">    </span><span class="c1"># true | false | ask — auto git-pull on start</span>
 </code></pre></div>
 
 
