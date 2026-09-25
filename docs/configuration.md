@@ -285,6 +285,26 @@ key cannot decrypt it — that is the isolation. Remove a machine with
 Private keys (`keys/`) are added to the store's `.gitignore` automatically,
 like `machine-id`.
 
+#### Files inside a tracked directory
+
+A whole tracked directory does not have to be encrypted to protect one file
+in it (e.g. `~/.config/opencode/opencode.json` next to many non-secret
+files). Such a file can be **carved out**:
+
+```bash
+tt --secrets migrate --apply .config/opencode/opencode.json
+```
+
+The file is encrypted and recorded as its own secret entry, while an
+anchored rule (`/opencode.json`) is written to `.ttignore` on both sides so
+the directory mirror leaves it alone — the two engines never fight over it,
+and no mirror code had to change. The rest of the directory keeps syncing
+(and diffing) as plaintext.
+
+In the file manager, `s` on a directory opens a picker of its visible files
+to encrypt; `tt --secrets unmark <path>` decrypts one back into the
+directory mirror.
+
 ### `includes.conf`
 
 A simple list of config directory names to include, one per line:

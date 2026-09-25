@@ -710,6 +710,8 @@ def _bare_screen(tmp_config: Path, notifications: list[str]) -> FileScreen:
     screen._tt_config = TTConfig(tmp_config)
     screen._system = SystemInfo()
     screen._tree_cache = {}
+    screen._secret_statuses = {}
+    screen._secret_cache = {}
     screen._refresh_files = lambda: None
     screen._show_diff = lambda *a, **k: None
     screen.notify = lambda msg, *a, **k: notifications.append(msg)
@@ -1562,3 +1564,45 @@ def test_secret_entry_appears_as_a_locked_row(tmp_config: Path, tmp_path: Path, 
     assert len(secret_rows) == 1
     assert secret_rows[0][1].plain == "S"
     assert "~/.config/tok" in secret_rows[0][2].plain
+
+
+def test_secret_row_build_does_not_decrypt(tmp_config: Path, tmp_path: Path, monkeypatch):
+    """Building the row list must not shell out to age: one subprocess per
+    secret on the UI thread froze the file manager on open. Rows start with
+    the neutral 'S' token and the real status comes from a background worker."""
+    host = "testhost"
+    (tmp_config / "configs" / host / "secrets.conf").write_text("tok;.config/tok\n")
+    (tmp_config / "configs" / host / "files" / "tok").write_bytes(
+        b"age-encryption.org/v1\n"
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    system = SystemInfo()
+    monkeypatch.setattr(system, "hostname", host, raising=False)
+    screen = FileScreen(TTConfig(tmp_config), system)
+
+    def boom(*_a, **_k):
+        raise AssertionError("_secret_status must not run during _build_rows")
+
+    monkeypatch.setattr(screen, "_secret_status", boom)
+    rows = screen._build_rows()
+    secret_rows = [r for r in rows if r[0].startswith("secret ")]
+    assert secret_rows
+    assert secret_rows[0][1].plain == "S"
+
+
+@pytest.mark.asyncio
+async def test_select_secret_files_screen_lists_candidates():
+    """The directory picker shows every candidate and starts all-unselected
+    (opt-in: selecting encrypts, leaving unselected keeps it plaintext)."""
+    from textual.widgets import SelectionList
+    from tui.screens.files import SelectSecretFilesScreen
+
+    screen = SelectSecretFilesScreen("Encrypt files", ["a.json", "b.json"])
+    app = _DialogApp(screen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        sl = screen.query_one("#select-secret-list", SelectionList)
+        assert sl.option_count == 2
+        assert list(sl.selected) == []

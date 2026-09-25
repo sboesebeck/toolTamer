@@ -9,6 +9,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     DataTable,
@@ -37,7 +38,7 @@ from tui.core.config import (
 from tui.core.diff_render import render_changed_diffs
 from tui.core.ignore import IgnoreMatcher, append_ignore, load
 from tui.core.repo import RepoSpec
-from tui.core.secret_ops import ensure_scope_for, migrate_entry
+from tui.core.secret_ops import ensure_scope_for, mark_inner_secret, migrate_entry
 from tui.core.secrets import SecretStore, SecretsError
 from tui.core.system import SystemInfo
 
@@ -86,6 +87,8 @@ _BUCKET_TO_TOKEN = {
 class FileScreen(Screen):
     """View and manage tracked config files."""
 
+    _TITLE = "Files  [dim]OK=synced  !!=changed  --=missing  <<=shadowed  ===dup-in-config[/]"
+
     BINDINGS = [
         ("escape", "go_back", "Back"),
         ("a", "apply_to_system", "TT -> System"),
@@ -95,6 +98,7 @@ class FileScreen(Screen):
         ("n", "add_file", "Add File"),
         ("g", "convert_to_repo", "To repo"),
         ("s", "make_secret", "Encrypt"),
+        ("v", "view_file", "View"),
         ("slash", "focus_search", "Search"),
         ("tab", "switch_pane", "Switch Pane"),
     ]
@@ -106,6 +110,13 @@ class FileScreen(Screen):
         self._store = SecretStore(tt_config.base, system.hostname)
         # tree-hash cache: path -> (stat signature, content hash)
         self._tree_cache: dict[str, tuple[str, str]] = {}
+        # Secret status is *not* computed while building rows: each secret is
+        # an age subprocess, and doing that synchronously on mount made the
+        # screen freeze for seconds. Rows show a neutral token and a
+        # background worker fills the real status in (see _scan_secret_statuses).
+        self._secret_statuses: dict[str, str] = {}
+        # decrypted-status cache: store path -> (stat signature, status)
+        self._secret_cache: dict[str, tuple[tuple, str]] = {}
         # rows built by the last _load_files pass, so filtering can re-render
         # without recomputing every entry's status
         self._rows: list[tuple[str, Text, Text, Text, str]] = []
@@ -115,8 +126,9 @@ class FileScreen(Screen):
         with Container(id="file-screen"):
             with Container(id="file-list-pane"):
                 yield Label(
-                    "Files  [dim]OK=synced  !!=changed  --=missing  <<=shadowed  ===dup-in-config[/]",
+                    self._TITLE,
                     classes="section-title",
+                    id="file-title",
                 )
                 yield Input(
                     placeholder="Filter (path, config, or status: OK !! -- ?? << ==)",
@@ -143,12 +155,63 @@ class FileScreen(Screen):
         log.write(Text("  r  Remove file from TT config", style="dim"))
         log.write(Text("  m  Move file to another config", style="dim"))
         log.write(Text("  n  Add new file or directory to TT", style="dim"))
+        log.write(Text("  v  View file contents (decrypted for secrets)", style="dim"))
+        log.write(Text("  s  Encrypt entry (on a directory: pick files inside)", style="dim"))
         log.write(Text("  /  Filter files", style="dim"))
         log.write(Text("  Esc  Back", style="dim"))
 
-    def _load_files(self, filter_text: str = "") -> None:
+    def _load_files(self, filter_text: str = "", spawn_scan: bool = True) -> None:
         self._rows = self._build_rows()
         self._render_rows(filter_text)
+        if spawn_scan and any(row[0].startswith("secret ") for row in self._rows):
+            # Row building stays decryption-free; the real secret status is
+            # filled in off the UI thread.
+            self._scan_secret_statuses()
+
+    @work(thread=True, exclusive=True, group="secret-scan")
+    def _scan_secret_statuses(self) -> None:
+        """Decrypt each secret off the UI thread and fill in its real status.
+
+        Each secret is one `age` subprocess; running that while building rows
+        froze the file manager for seconds. Statuses are cached by stat
+        signature, so a refresh with nothing changed costs nothing."""
+        worker = get_current_worker()
+        host = self._system.hostname
+        home = Path.home()
+        self.app.call_from_thread(self._set_secret_scanning, True)
+        changed = False
+        for sec in self._tt_config.get_effective_secrets(host):
+            if not sec.is_effective or worker.is_cancelled:
+                continue
+            key = f"{sec.config}:{sec.stored}:{sec.target}"
+            status = self._secret_status(
+                sec.repo_path, home / sec.effective_target, sec.scope
+            )
+            if self._secret_statuses.get(key) != status:
+                self._secret_statuses[key] = status
+                changed = True
+        if worker.is_cancelled:
+            return
+        self.app.call_from_thread(self._set_secret_scanning, False)
+        if changed:
+            self.app.call_from_thread(self._rerender_rows)
+
+    def _set_secret_scanning(self, active: bool) -> None:
+        try:
+            title = self.query_one("#file-title", Label)
+        except NoMatches:
+            return
+        suffix = "  [dim]\U0001f512 scanning secrets…[/]" if active else ""
+        title.update(self._TITLE + suffix)
+
+    def _rerender_rows(self) -> None:
+        """Redraw with the statuses the background scan just produced. No new
+        scan is spawned — that would loop on every completion."""
+        try:
+            current = self.query_one("#file-filter", Input).value
+        except NoMatches:
+            return
+        self._load_files(filter_text=current, spawn_scan=False)
 
     def _render_rows(self, filter_text: str = "") -> None:
         """Draw the rows built by the last _build_rows() pass, applying the
@@ -235,7 +298,10 @@ class FileScreen(Screen):
             ))
 
         # Secret entries (secrets.conf) get their own rows so they are
-        # visible and manageable without leaking plaintext anywhere.
+        # visible and manageable without leaking plaintext anywhere. Status
+        # comes from the background scan if it has run, else a neutral "S"
+        # — never an age subprocess here (this runs on mount and on every
+        # refresh; decrypting each secret here froze the screen).
         for sec in sorted(
             self._tt_config.get_effective_secrets(host),
             key=lambda x: (x.effective_target, not x.is_effective),
@@ -243,20 +309,22 @@ class FileScreen(Screen):
             if not sec.is_effective:
                 continue
             eff_target = sec.effective_target
-            sys_file = home / eff_target
-            status = self._secret_status(sec.repo_path, sys_file, sec.scope)
+            key = f"{sec.config}:{sec.stored}:{sec.target}"
+            status = self._secret_statuses.get(key, "unknown")
             status_token = {
                 "ok": "OK",
                 "modified": "!!",
                 "missing_system": "--",
                 "missing_repo": "??",
-            }.get(status, "??")
+            }.get(status, "S")
             searchable = f"secret {status_token} ~/{eff_target} {sec.config}".lower()
-            st = Text("S")
+            st = Text(status_token)
             if status == "ok":
                 st.stylize("green")
             elif status == "modified":
                 st.stylize("bold yellow")
+            elif status == "unknown":
+                st.stylize("dim cyan")
             else:
                 st.stylize("red")
             target_text = Text(f"~/{eff_target}")
@@ -264,26 +332,45 @@ class FileScreen(Screen):
             cfg_text = Text(sec.config)
             rows.append((
                 searchable, st, target_text, cfg_text,
-                f"{sec.config}:{sec.stored}:{sec.target}",
+                key,
             ))
         return rows
 
     def _secret_status(self, store: Path, system: Path, scope: str) -> str:
         """Compare a secret by its decrypted plaintext, never its ciphertext
-        (age output is non-deterministic and would always read as changed)."""
+        (age output is non-deterministic and would always read as changed).
+
+        Cached on the stat signature of both sides, so a refresh that
+        changes nothing does not shell out to age again."""
         if not store.exists():
             return "missing_repo"
         if not system.exists():
             return "missing_system"
         try:
+            st = store.stat()
+            sy = system.stat()
+            sig = (st.st_size, st.st_mtime_ns, sy.st_size, sy.st_mtime_ns)
+        except OSError:
+            sig = None
+        cache_key = str(store)
+        cached = self._secret_cache.get(cache_key)
+        if cached is not None and sig is not None and cached[0] == sig:
+            return cached[1]
+        try:
             data = self._store.read_secret(scope, store)
         except SecretsError:
             # Cannot decrypt (no key yet / wrong store) — surface as missing
             # rather than pretending it is in sync.
-            return "missing_repo"
-        if hashlib.sha1(data).hexdigest() == hashlib.sha1(system.read_bytes()).hexdigest():
-            return "ok"
-        return "modified"
+            status = "missing_repo"
+        else:
+            status = (
+                "ok"
+                if hashlib.sha1(data).hexdigest() == hashlib.sha1(system.read_bytes()).hexdigest()
+                else "modified"
+            )
+        if sig is not None:
+            self._secret_cache[cache_key] = (sig, status)
+        return status
 
     def _refresh_files(self) -> None:
         current_filter = self.query_one("#file-filter", Input).value
@@ -1257,14 +1344,25 @@ class FileScreen(Screen):
         config, stored, target = sel
         from tui.core.config import _resolve_effective_target
         eff_target = _resolve_effective_target(stored, target)
+        repo_file = self._tt_config.configs_dir / config / "files" / stored
+
+        if repo_file.is_dir() and not repo_file.is_symlink():
+            if repo_mod.read_marker(repo_file) is not None:
+                self.notify(
+                    "Repo entries are synced with git — mark files inside it instead.",
+                    severity="warning", timeout=8,
+                )
+                return
+            self._pick_inner_secrets(config, stored, target)
+            return
+
         if self._tt_config.is_secret(config, stored, target):
             self.notify(f"~/{eff_target} is already encrypted.", severity="information", timeout=6)
             return
-        repo_file = self._tt_config.configs_dir / config / "files" / stored
         if not repo_file.is_file() or repo_file.is_symlink():
             self.notify(
-                f"Only regular files can be encrypted — ~/{eff_target} is a "
-                f"directory or symlink.", severity="warning", timeout=8,
+                f"Only regular files can be encrypted — ~/{eff_target} is a symlink.",
+                severity="warning", timeout=8,
             )
             return
         scope = config
@@ -1280,6 +1378,149 @@ class FileScreen(Screen):
             f"Encrypted ~/{eff_target} (scope {scope})", severity="information", timeout=8,
         )
         self._refresh_files()
+
+    def _pick_inner_secrets(self, config: str, stored: str, target: str) -> None:
+        """Offer the visible files of a tracked directory to encrypt, one by
+        one. Only regular files (never ignore files) are candidates; already
+        encrypted ones are left out."""
+        from tui.core.config import _resolve_effective_target
+        from tui.core.ignore import IGNORE_FILENAMES
+
+        dir_eff = _resolve_effective_target(stored, target)
+        sys_dir = Path.home() / dir_eff
+        store_dir = self._tt_config.configs_dir / config / "files" / stored
+        root = sys_dir if sys_dir.is_dir() else store_dir
+        matcher = load(root)
+        candidates: list[str] = []
+        for rel, p in sorted(iter_tree_files(root, matcher)):
+            if p.is_symlink() or not p.is_file():
+                continue
+            if rel.rsplit("/", 1)[-1] in IGNORE_FILENAMES:
+                continue
+            if self._tt_config.is_secret(config, f"{stored}/{rel}", f"{dir_eff}/{rel}"):
+                continue
+            candidates.append(rel)
+        if not candidates:
+            self.notify(
+                f"No plaintext files left to encrypt in ~/{dir_eff}.",
+                severity="information", timeout=8,
+            )
+            return
+        self.app.push_screen(
+            SelectSecretFilesScreen(
+                f"Encrypt files inside ~/{dir_eff}  ({config})", candidates
+            ),
+            callback=lambda chosen: self._apply_inner_secrets(
+                config, stored, dir_eff, chosen
+            ),
+        )
+
+    def _apply_inner_secrets(
+        self, config: str, stored: str, dir_eff: str, chosen: "list[str] | None"
+    ) -> None:
+        if not chosen:
+            return
+        scope = config
+        done = 0
+        errors: list[str] = []
+        for rel in chosen:
+            try:
+                mark_inner_secret(
+                    self._tt_config, self._store, self._system.hostname,
+                    config, stored, rel, scope, self._store.find_admin_key(),
+                )
+                done += 1
+            except (SecretsError, OSError) as exc:
+                errors.append(f"{rel}: {exc}")
+        if done:
+            self.notify(
+                f"Encrypted {done} file(s) inside ~/{dir_eff} (scope {scope}).",
+                severity="information", timeout=8,
+            )
+        for err in errors[:3]:
+            self.notify(f"Failed {err}", severity="error", timeout=8)
+        self._refresh_files()
+
+    def action_view_file(self) -> None:
+        """Show the selected entry's contents in the detail pane.
+
+        For a secret the stored copy is decrypted in memory first, so the
+        user can see what they are about to encrypt/keep without any
+        plaintext touching the store. Directories list their tracked files."""
+        sel = self._get_selected()
+        if not sel:
+            return
+        config, stored, target = sel
+        self._view_file(config, stored, target)
+
+    @work(thread=True, exclusive=True)
+    def _view_file(self, config: str, stored: str, target: str) -> None:
+        from tui.core.config import _resolve_effective_target
+
+        log = self.query_one("#file-diff", RichLog)
+        self.app.call_from_thread(log.clear)
+        repo_file = self._tt_config.configs_dir / config / "files" / stored
+        eff = _resolve_effective_target(stored, target)
+        self.app.call_from_thread(log.write, Text(f"~/{eff}", style="bold"))
+        self.app.call_from_thread(
+            log.write, Text(f"Config: {config}   stored: {stored}", style="dim")
+        )
+        self.app.call_from_thread(log.write, Text(""))
+
+        if repo_file.is_dir():
+            if repo_mod.read_marker(repo_file) is not None:
+                self.app.call_from_thread(
+                    log.write,
+                    Text("Repo entry — press 'a' or check the diff for its git state.", style="dim"),
+                )
+                return
+            self.app.call_from_thread(log.write, Text("Tracked directory — visible files:", style="bold"))
+            entries = [rel for rel, _ in sorted(iter_tree_files(repo_file))]
+            for rel in entries[:300]:
+                self.app.call_from_thread(log.write, Text("  " + rel))
+            if len(entries) > 300:
+                self.app.call_from_thread(
+                    log.write, Text(f"  … and {len(entries) - 300} more", style="dim")
+                )
+            return
+
+        if not repo_file.exists():
+            self.app.call_from_thread(log.write, Text("Stored file missing", style="red"))
+            return
+
+        secret = self._tt_config.secret_for(config, stored, target)
+        try:
+            if secret is not None:
+                data = self._store.read_secret(secret.scope, repo_file)
+                self.app.call_from_thread(
+                    log.write,
+                    Text(f"— decrypted from scope '{secret.scope}' —", style="bold cyan"),
+                )
+            else:
+                data = repo_file.read_bytes()
+        except (SecretsError, OSError) as exc:
+            self.app.call_from_thread(log.write, Text(f"Cannot read: {exc}", style="red"))
+            return
+
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            self.app.call_from_thread(
+                log.write, Text(f"binary file — {len(data)} bytes (not shown)", style="yellow")
+            )
+            return
+
+        lines = text.splitlines()
+        for line in lines[:500]:
+            self.app.call_from_thread(log.write, Text(line))
+        if len(lines) > 500:
+            self.app.call_from_thread(
+                log.write, Text(f"… {len(lines) - 500} more lines", style="dim")
+            )
+        self.app.call_from_thread(log.write, Text(""))
+        self.app.call_from_thread(
+            log.write, Text(f"{len(data)} bytes, {len(lines)} lines", style="dim")
+        )
 
     def action_move_file(self) -> None:
         """Move file to another config."""
@@ -1528,6 +1769,78 @@ class FileScreen(Screen):
         self.app.push_screen(
             ConvertToRepoScreen(eff, config, spec, count), callback=_after
         )
+
+
+class SelectSecretFilesScreen(ModalScreen["list[str] | None"]):
+    """Pick which files of a tracked directory to encrypt individually.
+
+    Selected entries become inner secrets (carved out of the directory
+    mirror); unselected stay plaintext. Returns the chosen rel paths on
+    confirm, None on Esc."""
+
+    # Priority bindings: SelectionList would otherwise eat the plain keys
+    # for its own type-ahead.
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("a", "select_all", "All", priority=True),
+        Binding("n", "select_none", "None", priority=True),
+        Binding("enter", "confirm", "Encrypt", priority=True),
+    ]
+
+    DEFAULT_CSS = """
+    SelectSecretFilesScreen {
+        align: center middle;
+    }
+    #select-secret-dialog {
+        width: 90;
+        height: auto;
+        max-height: 80%;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #select-secret-list {
+        height: 20;
+        max-height: 20;
+        border: round $panel;
+    }
+    """
+
+    def __init__(self, header: str, files: list[str]):
+        super().__init__()
+        self._header = header
+        self._files = files
+
+    def compose(self) -> ComposeResult:
+        with Container(id="select-secret-dialog"):
+            yield Label(Text(self._header, style="bold cyan"))
+            yield Label(Text(""))
+            yield Label(Text(
+                f"{len(self._files)} file(s) — selected = encrypt, unselected = leave plain:",
+                style="bold",
+            ))
+            yield SelectionList(
+                *[Selection(f, value=f, initial_state=False) for f in self._files],
+                id="select-secret-list",
+            )
+            yield Label(Text(""))
+            yield Label(Text(
+                "Space=toggle  a=all  n=none  Enter=encrypt  Esc=cancel",
+                style="dim",
+            ))
+
+    def action_select_all(self) -> None:
+        self.query_one("#select-secret-list", SelectionList).select_all()
+
+    def action_select_none(self) -> None:
+        self.query_one("#select-secret-list", SelectionList).deselect_all()
+
+    def action_confirm(self) -> None:
+        selected = list(self.query_one("#select-secret-list", SelectionList).selected)
+        self.dismiss(selected)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ReviewNewFilesScreen(ModalScreen["dict[str, bool] | None"]):

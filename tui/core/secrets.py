@@ -159,14 +159,32 @@ def encrypt_file(recipients: list[str], src: Path, dest: Path) -> None:
 
 
 def decrypt_file(identity: Path, src: Path, dest: Path) -> None:
-    """Decrypt `src` with `identity`, writing `dest`."""
+    """Decrypt `src` with `identity`, writing `dest`.
+
+    Handles `src == dest` (decrypt-in-place) via a sibling temp file: age
+    refuses to read and write the same file."""
     exe = require_age()
+    src = Path(src)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    args = [exe, "-d", "-i", str(identity), "-o", str(dest), str(src)]
+    in_place = src.exists() and dest.exists() and src.resolve() == dest.resolve()
+    target = dest
+    tmp: Path | None = None
+    if in_place:
+        import tempfile as _tempfile
+
+        fd, name = _tempfile.mkstemp(dir=str(dest.parent), prefix=".ttdec-")
+        os.close(fd)
+        tmp = Path(name)
+        target = tmp
+    args = [exe, "-d", "-i", str(identity), "-o", str(target), str(src)]
     rc, _out, err = _run(args)
     if rc != 0:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
         raise SecretsError(f"age decryption failed: {err.decode(errors='replace').strip()}")
+    if tmp is not None:
+        os.replace(tmp, dest)
 
 
 def decrypt_bytes(identity: Path, src: Path) -> bytes:
@@ -515,6 +533,23 @@ class SecretStore:
             identity = self._unwrap_scope_key(scope, candidates)
             try:
                 decrypt_file(identity, src, dest)
+            finally:
+                shutil.rmtree(identity.parent, ignore_errors=True)
+
+    def decrypt_in_place(
+        self,
+        scope: str,
+        path: Path,
+        member_ids: list[str] | None = None,
+        admin_key: Path | None = None,
+    ) -> None:
+        """Decrypt the scope-encrypted `path` back to plaintext in place."""
+        admin = self.find_admin_key(admin_key)
+        candidates = self.scope_identity_candidates(scope, member_ids or [], admin)
+        with tempfile.TemporaryDirectory() as td:
+            identity = self._unwrap_scope_key(scope, candidates)
+            try:
+                decrypt_file(identity, path, path)
             finally:
                 shutil.rmtree(identity.parent, ignore_errors=True)
 

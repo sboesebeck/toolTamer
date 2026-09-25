@@ -176,3 +176,26 @@ def append_ignore(rules_root: Path, rel: str, is_dir: bool) -> None:
     prefix = "" if (not existing or existing.endswith("\n")) else "\n"
     with f.open("a") as fh:
         fh.write(f"{prefix}{line}\n")
+
+
+def remove_ignore(rules_root: Path, rel: str, is_dir: bool) -> None:
+    """Remove the anchored `/<rel>` line `append_ignore` would have written.
+
+    Inverse of append_ignore, used when an inner secret is un-marked so the
+    directory mirror picks the path up again. Missing file/line is a no-op."""
+    rules_root = Path(rules_root)
+    rel = rel.replace(os.sep, "/").strip("/")
+    if not rel:
+        return
+    line = f"/{rel}/" if is_dir else f"/{rel}"
+    f = rules_root / ".ttignore"
+    if not f.exists():
+        return
+    try:
+        lines = f.read_text().splitlines()
+    except OSError:
+        return
+    kept = [ln for ln in lines if ln.strip() != line]
+    if kept == lines:
+        return
+    f.write_text("\n".join(kept) + "\n" if kept else "")

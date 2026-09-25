@@ -13,6 +13,7 @@ from textual.worker import get_current_worker
 from tui.core import repo as repo_mod
 from tui.core.config import TTConfig, tree_hash
 from tui.core.dep_cache import DependencyResolver, default_cache_path
+from tui.core.ignore import load
 from tui.core.pkg_names import installed_index, is_installed, short_name
 from tui.core.system import SystemInfo
 
@@ -220,7 +221,14 @@ class StatusBar(Widget):
                 missing_file_names.append(m.effective_target)
             elif sys_file.is_dir() and m.repo_path.is_dir():
                 try:
-                    if tree_hash(m.repo_path) != tree_hash(sys_file):
+                    # Rules come from the system side (the worktree) when it
+                    # exists, exactly as the file manager compares them. Hashing
+                    # both trees without the matcher reported every tracked
+                    # directory that carries a .gitignore/.ttignore (e.g.
+                    # ~/.config/opencode) as "changed" forever, while the file
+                    # manager — which does apply the rules — called it identical.
+                    matcher = load(sys_file)
+                    if tree_hash(m.repo_path, matcher) != tree_hash(sys_file, matcher):
                         modified_files.append(m.effective_target)
                 except (OSError, PermissionError):
                     continue

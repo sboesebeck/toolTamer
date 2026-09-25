@@ -169,3 +169,19 @@ def test_matcher_constructor_is_usable_directly(tmp_path: Path):
     (tmp_path / ".gitignore").write_text("build/\n")
     m = IgnoreMatcher(tmp_path)
     assert m.is_ignored("build/out.o")
+
+
+def test_remove_ignore_is_the_inverse_of_append(tmp_path: Path):
+    from tui.core.ignore import append_ignore, remove_ignore
+
+    root = tmp_path / "tree"
+    root.mkdir()
+    append_ignore(root, "secret.json", is_dir=False)
+    append_ignore(root, "keep.txt", is_dir=False)
+    assert (root / ".ttignore").read_text().splitlines() == ["/secret.json", "/keep.txt"]
+
+    remove_ignore(root, "secret.json", is_dir=False)
+    assert (root / ".ttignore").read_text().splitlines() == ["/keep.txt"]
+    # missing line / missing file are no-ops
+    remove_ignore(root, "never-there", is_dir=False)
+    remove_ignore(tmp_path / "nope", "x", is_dir=False)

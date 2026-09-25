@@ -221,3 +221,46 @@ def test_migrate_entry_encrypts_and_moves_mapping(tmp_path: Path):
     assert TTConfig(base).get_secrets("common") == [("id", ".ssh/id", "common")]
     assert "id;.ssh/id" not in (base / "configs" / "common" / "files.conf").read_text()
 
+
+
+def test_mark_and_unmark_inner_secret(tmp_path: Path):
+    """A file inside a tracked directory can be carved out: ciphertext in the
+    store, an anchored .ttignore rule on both sides, and its own secret
+    entry. Unmarking reverses all of it."""
+    from tui.core.secret_ops import mark_inner_secret, unmark_inner_secret
+
+    base = _base_with_configs(tmp_path)
+    store = _store(base, "hostA")
+    store.ensure_admin_key()
+    (base / "configs" / "common" / "files.conf").write_text("app;.config/app\n")
+    store_dir = base / "configs" / "common" / "files" / "app"
+    store_dir.mkdir(parents=True)
+    (store_dir / "public.txt").write_text("public\n")
+    (store_dir / "secret.json").write_text("KEY=sekret\n")
+
+    home = tmp_path / "home"
+    sys_dir = home / ".config" / "app"
+    sys_dir.mkdir(parents=True)
+    (sys_dir / "public.txt").write_text("public\n")
+    (sys_dir / "secret.json").write_text("KEY=sekret\n")
+
+    cfg = TTConfig(base)
+    mark_inner_secret(
+        cfg, store, "hostA", "common", "app", "secret.json", "common",
+        home=home,
+    )
+
+    assert S.is_ciphertext(store_dir / "secret.json")
+    assert not S.is_ciphertext(store_dir / "public.txt")
+    assert cfg.get_secrets("common") == [
+        ("app/secret.json", ".config/app/secret.json", "common")
+    ]
+    assert (store_dir / ".ttignore").read_text().strip() == "/secret.json"
+    assert (sys_dir / ".ttignore").read_text().strip() == "/secret.json"
+    assert cfg.is_secret("common", "app/secret.json", ".config/app/secret.json")
+
+    unmark_inner_secret(cfg, store, "common", "app", "secret.json", "common", home=home)
+    assert (store_dir / "secret.json").read_text() == "KEY=sekret\n"
+    assert cfg.get_secrets("common") == []
+    assert (store_dir / ".ttignore").read_text() == ""
+    assert (sys_dir / ".ttignore").read_text() == ""

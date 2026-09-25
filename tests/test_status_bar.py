@@ -399,3 +399,39 @@ def test_tap_qualified_entries_are_not_counted_missing_or_extra(
     assert "missing" not in text, text
     assert "extra" not in text, text
     assert "all synced" in text, text
+
+
+def test_tracked_dir_with_ignore_rules_is_not_reported_changed(
+    tmp_config: Path, tmp_path: Path, monkeypatch
+):
+    """A tracked directory carrying a .gitignore/.ttignore must not read as
+    "changed" on the dashboard just because an ignored file differs. The
+    file manager already applied the rules; the status bar hashed both trees
+    unfiltered and disagreed with it (e.g. ~/.config/opencode)."""
+    (tmp_config / "configs" / "common" / "files.conf").write_text(
+        "app;.config/app\n"
+    )
+    store = tmp_config / "configs" / "common" / "files" / "app"
+    store.mkdir(parents=True)
+    (store / ".gitignore").write_text("ignored.txt\n")
+    (store / "kept.txt").write_text("same\n")
+
+    fake_home = tmp_path / "home"
+    sys_dir = fake_home / ".config" / "app"
+    sys_dir.mkdir(parents=True)
+    (sys_dir / ".gitignore").write_text("ignored.txt\n")
+    (sys_dir / "kept.txt").write_text("same\n")
+    (sys_dir / "ignored.txt").write_text("DIFFERENT — but ignored\n")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+    status_bar = _make_status_bar(tmp_config, monkeypatch)
+    monkeypatch.setattr(
+        "tui.widgets.status_bar.get_current_worker",
+        lambda: MagicMock(is_cancelled=False),
+    )
+
+    StatusBar._scan_status.__wrapped__(status_bar)
+
+    text = _file_count_text(status_bar)
+    assert "all synced" in text, text
+    assert "changed" not in text, text
