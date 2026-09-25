@@ -479,6 +479,45 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#secrets-encrypted-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secrets (encrypted entries)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Secrets (encrypted entries)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bootstrapping-a-new-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bootstrapping a new machine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-sync-treats-a-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How sync treats a secret
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#includesconf" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -674,6 +713,45 @@
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#secrets-encrypted-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secrets (encrypted entries)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Secrets (encrypted entries)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bootstrapping-a-new-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bootstrapping a new machine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-sync-treats-a-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How sync treats a secret
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -1012,18 +1090,71 @@ and only writes the marker back when one of them actually changed.</p>
 submodules. A repository with uncommitted changes or a history that has
 diverged from the remote is skipped, not merged — you resolve it by hand,
 in the repository itself.</p>
+<h3 id="secrets-encrypted-entries">Secrets (encrypted entries)<a class="headerlink" href="#secrets-encrypted-entries" title="Permanent link">&para;</a></h3>
+<p>The store is one git repo that every machine clones in full, so anything
+committed to it is on every machine. Put ssh keys, tokens, <code>.netrc</code> and
+similar material in <code>secrets.conf</code> instead of <code>files.conf</code> — those entries
+are stored <strong>encrypted</strong> (age), and a machine can only decrypt the ones it
+is entitled to.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a># configs/common/secrets.conf
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a># stored;target[;scope]   — same layout as files.conf, scope defaults to
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>#                           the config the entry lives in
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>id_ed25519;.ssh/id_ed25519
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>work_token;.config/work/token
+</code></pre></div>
+<p>A <strong>scope</strong> is a config name, so entitlement follows the include hierarchy:
+a secret in <code>common</code> reaches every machine, one in a host config only that
+host, one in <code>common_mac</code> the machines that include it. Each scope has an
+age keypair; the private half is stored in the repo <strong>wrapped to the
+members plus the admin key</strong>, and secret files are encrypted to the scope's
+public key. Adding a machine re-wraps that one small key — the secret files
+are not touched.</p>
+<p>Requires the <code>age</code> binary (<code>brew install age</code> / <code>apt install age</code>).</p>
+<h4 id="bootstrapping-a-new-machine">Bootstrapping a new machine<a class="headerlink" href="#bootstrapping-a-new-machine" title="Permanent link">&para;</a></h4>
+<p>No private key is ever copied between machines — only public keys travel.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># first machine, once</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>tt<span class="w"> </span>--secrets<span class="w"> </span>init<span class="w">          </span><span class="c1"># creates keys/&lt;id&gt;.key (local) and secrets/admin.pub</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">                           </span><span class="c1"># prints the admin private key — keep it in a</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">                           </span><span class="c1"># password manager, off the repo</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># new machine: clone the config repo, then</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>tt<span class="w"> </span>--secrets<span class="w"> </span>init<span class="w">          </span><span class="c1"># registers this machine's public key</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>tt<span class="w"> </span>--secrets<span class="w"> </span>join<span class="w"> </span>--admin-key<span class="w"> </span>&lt;recovery<span class="w"> </span>key&gt;<span class="w">   </span><span class="c1"># becomes a member of its scopes</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="c1"># move existing plaintext files into encrypted storage</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>tt<span class="w"> </span>--secrets<span class="w"> </span>migrate<span class="w">        </span><span class="c1"># dry run; --apply to encrypt</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>tt<span class="w"> </span>--secrets<span class="w"> </span>check<span class="w">          </span><span class="c1"># fails if a secret entry is plaintext</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>tt<span class="w"> </span>--secrets<span class="w"> </span>status<span class="w">         </span><span class="c1"># scopes, members, entries</span>
+</code></pre></div>
+<p><code>join</code> needs the admin/recovery key once (a paste from your password
+manager). A machine that is <em>not</em> a member of a scope and holds no admin
+key cannot decrypt it — that is the isolation. Remove a machine with
+<code>tt --secrets rotate &lt;scope&gt;</code> (new scope key + re-encrypt its files).</p>
+<h4 id="how-sync-treats-a-secret">How sync treats a secret<a class="headerlink" href="#how-sync-treats-a-secret" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>TT → system</strong>: decrypt, write, <code>chmod 600</code>.</li>
+<li><strong>system → TT</strong>: encrypt; only rewritten when the plaintext actually
+  changed (age output is non-deterministic).</li>
+<li>Comparisons and diffs use the decrypted plaintext, never the ciphertext.</li>
+<li>In the file manager secrets show with an <code>S</code> token and a lock; <code>a</code> applies
+  (decrypts), <code>u</code> saves (encrypts), <code>s</code> encrypts an existing plaintext entry.</li>
+<li>Bash delegates all crypto to <code>python -m tui.secrets</code>, so there is a single
+  implementation; the encrypt/decrypt path needs only Python + <code>age</code>.</li>
+</ul>
+<p>Private keys (<code>keys/</code>) are added to the store's <code>.gitignore</code> automatically,
+like <code>machine-id</code>.</p>
 <h3 id="includesconf"><code>includes.conf</code><a class="headerlink" href="#includesconf" title="Permanent link">&para;</a></h3>
 <p>A simple list of config directory names to include, one per line:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>common_mac
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>dev_tools
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>common_mac
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>dev_tools
 </code></pre></div>
 <h3 id="local_installsh"><code>local_install.sh</code><a class="headerlink" href="#local_installsh" title="Permanent link">&para;</a></h3>
 <p>An optional shell script executed every time <code>tt --syncSys</code> (or "Update System") runs. Scripts are executed in order: common → includes → host.</p>
 <p>Use this for installations that can't be handled by the package manager (e.g. manual downloads, pip installs, font installations).</p>
 <h3 id="taps-macos-only"><code>taps</code> (macOS only)<a class="headerlink" href="#taps-macos-only" title="Permanent link">&para;</a></h3>
 <p>A list of Homebrew taps, one per line:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>homebrew/cask-fonts
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>hashicorp/tap
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>homebrew/cask-fonts
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>hashicorp/tap
 </code></pre></div>
 <p>These are added before packages are installed. Note that a package listed
 under its fully qualified name (<code>hashicorp/tap/terraform</code>) does not need an
@@ -1037,7 +1168,7 @@ regenerated automatically whenever your installed packages change.</p>
 machine and has no business being shared.</p>
 <h2 id="global-settings">Global Settings<a class="headerlink" href="#global-settings" title="Permanent link">&para;</a></h2>
 <p>ToolTamer's own settings are in <code>~/.config/toolTamer/tt.conf</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">GIT_AUTO_UPDATE</span><span class="o">=</span>ask<span class="w">    </span><span class="c1"># true | false | ask — auto git-pull on start</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">GIT_AUTO_UPDATE</span><span class="o">=</span>ask<span class="w">    </span><span class="c1"># true | false | ask — auto git-pull on start</span>
 </code></pre></div>
 
 
