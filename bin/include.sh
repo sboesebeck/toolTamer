@@ -319,7 +319,7 @@ function treeHash() {
   fi
   (
     cd "$dir" || exit 1
-    find . \( -type f -o -type l \) -print0 2>/dev/null | sort -z | while IFS= read -r -d '' f; do
+    find . \( -name '*.ttbak' -prune \) -o \( -type f -o -type l \) -print0 2>/dev/null | sort -z | while IFS= read -r -d '' f; do
       if [ -L "$f" ]; then
         printf 'link %s -> %s\n' "$f" "$(readlink "$f")"
       else
@@ -354,7 +354,7 @@ function listDirExtras() {
     rm -f "$tmp_src" "$tmp_dst"
     return 0
   fi
-  (cd "$dst" && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') | while IFS= read -r f; do
+  (cd "$dst" && find . \( -name '*.ttbak' -prune \) -o \( -type f -o -type l \) -print 2>/dev/null | sed 's|^\./||') | while IFS= read -r f; do
     [ -z "$f" ] && continue
     if [ ! -e "$src/$f" ] && [ ! -L "$src/$f" ]; then
       echo "$f"
@@ -385,7 +385,9 @@ function dirFullyReadable() {
     return $?
   fi
   local enum_err
-  enum_err=$(cd "$dir" && find . \( -type f -o -type l \) 2>&1 >/dev/null)
+  # .ttbak backups are pruned first, so an unreadable backup directory never
+  # fails the readability check for a tree it is invisible to.
+  enum_err=$(cd "$dir" && find . \( -name '*.ttbak' -prune \) -o \( -type f -o -type l \) 2>&1 >/dev/null)
   [ -z "$enum_err" ]
 }
 
@@ -449,7 +451,7 @@ function mirrorDir() {
   fi
 
   if command -v rsync >/dev/null 2>&1; then
-    if rsync -a --delete "$src/" "$dst/"; then
+    if rsync -a --delete --exclude='*.ttbak' "$src/" "$dst/"; then
       return 0
     fi
     # rsync is installed and ran, so a nonzero exit here is a real
@@ -459,7 +461,7 @@ function mirrorDir() {
     warn "rsync failed while mirroring $src -> $dst - refusing (a partial run must not delete anything on $dst)"
     return 1
   fi
-  (cd "$src" && find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||') | while IFS= read -r f; do
+  (cd "$src" && find . \( -name '*.ttbak' -prune \) -o \( -type f -o -type l \) -print 2>/dev/null | sed 's|^\./||') | while IFS= read -r f; do
     [ -z "$f" ] && continue
     mkdir -p "$dst/$(dirname "$f")"
     if [ -L "$src/$f" ]; then

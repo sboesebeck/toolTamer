@@ -673,6 +673,98 @@ def test_mirror_tree_removes_visible_destination_extras(tmp_path: Path):
     assert (dst / "keep.txt").read_text() == "keep\n"
 
 
+# --- built-in .ttbak backups --------------------------------------------
+#
+# The backups ToolTamer writes while updating (<path>.ttbak) must never show
+# up as a change, an extra, or a stored file — with or without ignore files.
+
+
+def test_tree_hash_ignores_ttbak_files_and_directories(tmp_path: Path):
+    (tmp_path / "keep.txt").write_text("keep\n")
+    before = tree_hash(tmp_path)
+
+    (tmp_path / "keep.txt.ttbak").write_text("old\n")
+    (tmp_path / "archive.ttbak").mkdir()
+    (tmp_path / "archive.ttbak" / "x.txt").write_text("x\n")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "y.ttbak").write_text("y\n")
+
+    assert tree_hash(tmp_path) == before
+
+
+def test_dir_diff_hides_ttbak_extras_on_both_sides(tmp_path: Path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    for d in (src, dst):
+        d.mkdir()
+        (d / "keep.txt").write_text("keep\n")
+    (src / "src-only.ttbak").write_text("b\n")
+    (dst / "dst-only.ttbak").write_text("b\n")
+    (dst / "archive.ttbak").mkdir()
+    (dst / "archive.ttbak" / "x").write_text("x\n")
+
+    only_src, only_dst, changed = dir_diff(src, dst)
+    assert only_src == [] and only_dst == [] and changed == []
+
+
+def test_mirror_tree_without_matcher_never_copies_ttbak(tmp_path: Path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    (src / "keep.txt").write_text("keep\n")
+    (src / "old.ttbak").write_text("backup\n")
+    (src / "sub").mkdir()
+    (src / "sub" / "real.txt").write_text("real\n")
+    (src / "sub" / "nested.ttbak").write_text("nested\n")
+    (src / "dir.ttbak").mkdir()
+    (src / "dir.ttbak" / "x.txt").write_text("x\n")
+
+    mirror_tree(src, dst, None)
+
+    assert (dst / "keep.txt").is_file()
+    assert (dst / "sub" / "real.txt").is_file()
+    assert not (dst / "old.ttbak").exists()
+    assert not (dst / "sub" / "nested.ttbak").exists()
+    assert not (dst / "dir.ttbak").exists()
+
+
+def test_mirror_tree_with_matcher_keeps_and_skips_ttbak(tmp_path: Path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    for d in (src, dst):
+        d.mkdir()
+        (d / ".gitignore").write_text("cache/\n")
+    (src / "keep.txt").write_text("keep\n")
+    (src / "src.ttbak").write_text("b\n")
+    (dst / "old.ttbak").write_text("b\n")
+
+    mirror_tree(src, dst, load(src))
+
+    assert (dst / "keep.txt").read_text() == "keep\n"
+    assert not (dst / "src.ttbak").exists()  # never delivered
+    assert (dst / "old.ttbak").read_text() == "b\n"  # never deleted
+
+
+def test_copytree_ignore_skips_ttbak_without_ignore_files(tmp_path: Path):
+    import shutil
+
+    from tui.core.config import copytree_ignore
+
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    (src / "keep.txt").write_text("keep\n")
+    (src / "old.ttbak").write_text("backup\n")
+    (src / "sub").mkdir()
+    (src / "sub" / "nested.ttbak").write_text("nested\n")
+
+    shutil.copytree(src, dst, symlinks=True, ignore=copytree_ignore(None, src))
+
+    assert (dst / "keep.txt").is_file()
+    assert not (dst / "old.ttbak").exists()
+    assert not (dst / "sub" / "nested.ttbak").exists()
+
+
 def test_host_directory_supersedes_inherited_entries_inside_it(tmp_path: Path):
     """A directory mapping in a more specific config drops entries inherited
     from an earlier config that lie inside it (its own config's entries stay,

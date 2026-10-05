@@ -12,6 +12,13 @@ The matcher follows real gitignore semantics via `pathspec.GitIgnoreSpec`
 `.ttignore` are additive, in that order, so a later `.ttignore` pattern wins
 over an earlier `.gitignore` one. Deeper directories win over shallower ones.
 
+On top of the file rules there is one built-in, unconditional rule: the
+`.ttbak` backups ToolTamer writes while updating a tracked file or replacing
+a tree (`<path>.ttbak`) are invisible to every operation — never stored,
+never written, never deleted, never hashed — even in a tree with no ignore
+files, and even when a rule tries to re-include them. A backup sitting next
+to a synced file must not make the tree look "not in sync".
+
 This module has no Textual dependency: the TUI uses it directly, and
 `tui/ttignore.py` exposes it as a CLI for the Bash mirror. There is exactly
 one implementation of the matching semantics.
@@ -26,6 +33,11 @@ from typing import Iterator
 import pathspec
 
 IGNORE_FILENAMES = (".gitignore", ".ttignore")
+
+# Suffix of the single-slot scratch backups ToolTamer leaves next to a file
+# it replaced (`syncFile` in bin/tt) or a directory it moved aside
+# (`syncDirToSystem`/repo sync in bin/include.sh and tui/core/repo.py).
+TTBAK_SUFFIX = ".ttbak"
 
 
 class IgnoreMatcher:
@@ -71,10 +83,19 @@ class IgnoreMatcher:
         A path cannot be re-included once a parent directory is excluded
         (gitignore's rule), which is also what makes a filter run over every
         file agree with a pruned walk: the pruned walk never looks inside an
-        excluded directory, so no nested rule there may re-add anything."""
+        excluded directory, so no nested rule there may re-add anything.
+
+        The `.ttbak` backup suffix is ignored unconditionally: no rule, not
+        even a `!` re-inclusion, may make a backup visible. Any path
+        component is subject, so `dir.ttbak/file` is hidden exactly like
+        `file.ttbak` — the flat `filter` runs in Bash can only see the full
+        relative path, never the fact that a walk would have pruned a ttbak
+        directory before descending."""
         rel = rel.replace(os.sep, "/").strip("/")
         if not rel:
             return False
+        if any(part.endswith(TTBAK_SUFFIX) for part in rel.split("/")):
+            return True
         parts = rel.split("/")
         for i in range(1, len(parts)):
             if self._is_ignored_self("/".join(parts[:i]), is_dir=True):
@@ -135,6 +156,8 @@ def iter_visible(
     ):
         base = Path(dirpath)
         for name in filenames:
+            if name.endswith(TTBAK_SUFFIX):
+                continue
             p = base / name
             rel = p.relative_to(walk_root).as_posix()
             if matcher is not None and matcher.is_ignored(rel, is_dir=False):
@@ -143,6 +166,13 @@ def iter_visible(
         for name in list(dirnames):
             p = base / name
             rel = p.relative_to(walk_root).as_posix()
+            # Backups are invisible even in a tree without ignore files, so
+            # the pruned walk agrees with Bash's flat find+filter run: the
+            # find descends into a ttbak directory, but is_ignored on every
+            # component hides each of its paths.
+            if name.endswith(TTBAK_SUFFIX):
+                dirnames.remove(name)
+                continue
             if p.is_symlink():
                 dirnames.remove(name)
                 if matcher is not None and matcher.is_ignored(rel, is_dir=False):

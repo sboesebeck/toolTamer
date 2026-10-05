@@ -114,6 +114,15 @@ The **system directory is authoritative** (like the worktree is for git):
 ToolTamer takes the rules from the system copy when it exists, and from the
 store only when there is no system copy yet.
 
+`.ttbak` backups are always invisible, rules or not. When ToolTamer updates
+a tracked file it first moves the old version aside to `<path>.ttbak`; those
+backups are treated as if an ignore rule matched them — unconditionally, even
+in a directory with no ignore files, and no `!` rule can re-include them — so
+a backup that just appeared next to a synced file never marks the entry as
+*modified* or *out of sync*. They are never copied into the store, never
+copied to the system, and never deleted by a sync; existing backups are left
+where they are.
+
 !!! note "New files on the system"
 
     When you apply (`a`) or capture (`u`) a directory and the system side

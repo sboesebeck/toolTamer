@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from tui.core.ignore import IgnoreMatcher, iter_visible, load
+from tui.core.ignore import TTBAK_SUFFIX, IgnoreMatcher, iter_visible, load
 from tui.core.repo import RepoSpec, detect, read_marker, write_marker
 
 
@@ -126,16 +126,19 @@ def copytree_ignore(matcher: IgnoreMatcher | None, root: Path):
 
     Returning a directory name from the callback makes copytree skip it
     entirely (no recursion), so ignored directories are pruned exactly as
-    iter_visible prunes them. None matcher yields None, i.e. copytree's
-    default behaviour."""
-    if matcher is None:
-        return None
-
+    iter_visible prunes them. The `.ttbak` backups ToolTamer itself wrote are
+    always skipped too — a snapshot taken from a tree without ignore files
+    (matcher None) must still never carry a backup into the store."""
     def _ignore(dirpath: str, names: list[str]) -> set[str]:
         base = Path(dirpath)
         rel_dir = base.relative_to(root)
         ignored: set[str] = set()
         for name in names:
+            if name.endswith(TTBAK_SUFFIX):
+                ignored.add(name)
+                continue
+            if matcher is None:
+                continue
             p = base / name
             rel = (rel_dir / name).as_posix()
             is_dir = p.is_dir() and not p.is_symlink()
@@ -161,7 +164,10 @@ def mirror_tree(src: Path, dest: Path, matcher: IgnoreMatcher | None) -> None:
                 shutil.rmtree(dest)
             else:
                 dest.unlink()
-        shutil.copytree(src, dest, symlinks=True)
+        # copytree_ignore(None, src) still refuses the .ttbak backups, so a
+        # legacy wipe-and-copy never drags ToolTamer's own scratch files into
+        # the store (or onto the system).
+        shutil.copytree(src, dest, symlinks=True, ignore=copytree_ignore(None, src))
         return
 
     src_visible = {rel: p for rel, p in iter_tree_files(src, matcher)}

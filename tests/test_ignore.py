@@ -185,3 +185,98 @@ def test_remove_ignore_is_the_inverse_of_append(tmp_path: Path):
     # missing line / missing file are no-ops
     remove_ignore(root, "never-there", is_dir=False)
     remove_ignore(tmp_path / "nope", "x", is_dir=False)
+
+
+# --- built-in .ttbak rule -------------------------------------------------
+#
+# The backups ToolTamer writes while updating a file (<path>.ttbak) must be
+# invisible to every operation, with or without ignore files, and no rule may
+# re-include them.
+
+
+def test_load_stays_none_when_only_ttbak_is_present(tmp_path: Path):
+    _tree(tmp_path)
+    (tmp_path / "src" / "main.py.ttbak").write_text("old\n")
+    assert load(tmp_path) is None  # a backup is not an ignore file
+
+
+def test_ttbak_is_invisible_without_ignore_files(tmp_path: Path):
+    _tree(tmp_path)
+    (tmp_path / "main.py.ttbak").write_text("b\n")
+    (tmp_path / "secrets" / "token.json.ttbak").write_text("b\n")
+    rels = sorted(rel for rel, _ in iter_visible(tmp_path, None))
+    assert rels == [
+        "build/out.o",
+        "secrets/token.json",
+        "src/main.py",
+        "src/main.pyc",
+    ]
+
+
+def test_ttbak_directory_is_pruned_without_ignore_files(tmp_path: Path):
+    _tree(tmp_path)
+    (tmp_path / "old.ttbak").mkdir()
+    (tmp_path / "old.ttbak" / "deleted.txt").write_text("x\n")
+    (tmp_path / "old.ttbak" / "sub").mkdir()
+    (tmp_path / "old.ttbak" / "sub" / "y.txt").write_text("y\n")
+    assert load(tmp_path) is None
+    rels = sorted(rel for rel, _ in iter_visible(tmp_path, None))
+    assert rels == [
+        "build/out.o",
+        "secrets/token.json",
+        "src/main.py",
+        "src/main.pyc",
+    ]
+
+
+def test_ttbak_is_ignored_flat_and_inside_a_backup_directory(tmp_path: Path):
+    """A flat `filter` run in Bash sees only rel paths, not the pruned walk,
+    so `is_ignored` must hide every component, not just the full basename."""
+    _tree(tmp_path)
+    m = load(tmp_path)  # None: no ignore files
+    assert m is None
+    # Direct checks are what the Bash filter calls through the CLI matcher;
+    # with no ignore files load() is None, so the CLI's own ttbak guard in
+    # tui/ttignore.py covers that path. With a matcher present the rule must
+    # still fire:
+    (tmp_path / ".gitignore").write_text("build/\n")
+    m = load(tmp_path)
+    assert m is not None
+    assert m.is_ignored("main.py.ttbak")
+    assert m.is_ignored("secrets/token.json.ttbak")
+    assert m.is_ignored("old.ttbak/deleted.txt")  # ancestor component
+    assert m.is_ignored("old.ttbak/sub/y.txt")
+
+
+def test_ttbak_cannot_be_re_included(tmp_path: Path):
+    _tree(tmp_path)
+    (tmp_path / "keep.txt").write_text("k\n")
+    (tmp_path / "keep.txt.ttbak").write_text("b\n")
+    (tmp_path / ".gitignore").write_text("*.ttbak\n!keep.txt.ttbak\n")
+    m = load(tmp_path)
+    assert m is not None
+    assert m.is_ignored("keep.txt.ttbak")  # `!` cannot resurrect a backup
+    assert not m.is_ignored("keep.txt")
+
+
+def test_iter_visible_with_matcher_drops_ttbak(tmp_path: Path):
+    _tree(tmp_path)
+    (tmp_path / "main.py.ttbak").write_text("b\n")
+    (tmp_path / "old.ttbak").mkdir()
+    (tmp_path / "old.ttbak" / "x.txt").write_text("x\n")
+    (tmp_path / ".gitignore").write_text("build/\n")
+    m = load(tmp_path)
+    assert m is not None
+    rels = sorted(rel for rel, _ in iter_visible(tmp_path, m))
+    assert rels == [".gitignore", "secrets/token.json", "src/main.py", "src/main.pyc"]
+
+
+def test_ttbak_symlink_is_invisible(tmp_path: Path):
+    outer = tmp_path
+    (outer / "target.txt").write_text("t\n")
+    (outer / "tree").mkdir()
+    (outer / "tree" / "link.ttbak").symlink_to(outer / "target.txt")
+    (outer / "tree" / "real.txt").write_text("r\n")
+    assert load(outer / "tree") is None
+    rels = sorted(rel for rel, _ in iter_visible(outer / "tree", None))
+    assert rels == ["real.txt"]

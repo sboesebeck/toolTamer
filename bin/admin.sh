@@ -1108,6 +1108,7 @@ function process_directory_batch() {
     ! -path '*/.git/*' ! -path '*/.svn/*' ! -path '*/.hg/*' \
     ! -path '*/node_modules/*' ! -path '*/__pycache__/*' ! -path '*/.cache/*' \
     ! -name '*.swp' ! -name '*.swo' ! -name '*~' ! -name '.DS_Store' \
+    ! -name '*.ttbak' \
     2>/dev/null | sort)
 
   if [ ${#files[@]} -eq 0 ]; then

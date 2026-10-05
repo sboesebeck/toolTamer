@@ -20,17 +20,19 @@ import argparse
 import sys
 from pathlib import Path
 
-from tui.core.ignore import load
+from tui.core.ignore import TTBAK_SUFFIX, load
 
 
 def _visible(rules_root: Path):
-    """Return a predicate, or None when the tree has no ignore files."""
+    """Return a predicate over rel paths. Always hides ToolTamer's own
+    `.ttbak` backups — even in a tree without ignore files — so the Bash
+    mirror cannot accidentally treat a backup as tracked content."""
     matcher = load(rules_root)
-    if matcher is None:
-        return None
 
     def _keep(rel: str) -> bool:
-        return not matcher.is_ignored(rel, is_dir=False)
+        if any(part.endswith(TTBAK_SUFFIX) for part in rel.split("/")):
+            return False
+        return matcher is None or not matcher.is_ignored(rel, is_dir=False)
 
     return _keep
 
@@ -44,7 +46,7 @@ def _cmd_filter(rules_root: Path) -> int:
             rel = rel[2:]
         if not rel:
             continue
-        if keep is None or keep(rel):
+        if keep(rel):
             out.write(rel + "\n")
     return 0
 
